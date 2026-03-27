@@ -921,6 +921,67 @@ public abstract class SparkLanceNamespaceTestBase {
     assertEquals("TABLE_OR_VIEW_NOT_FOUND", ex.getErrorClass());
   }
 
+  @Test
+  public void testRenameTable() throws Exception {
+    String oldName = generateTableName("rename_old");
+    String newName = generateTableName("rename_new");
+    String fullOld = catalogName + ".default." + oldName;
+    String fullNew = catalogName + ".default." + newName;
+
+    // Create and populate table
+    spark.sql("CREATE TABLE " + fullOld + " (id BIGINT NOT NULL, name STRING)");
+    spark.sql("INSERT INTO " + fullOld + " VALUES (1, 'test')");
+
+    // Rename
+    spark.sql("ALTER TABLE " + fullOld + " RENAME TO " + fullNew);
+
+    // Verify new table exists and has data
+    Dataset<Row> result = spark.sql("SELECT * FROM " + fullNew);
+    List<Row> rows = result.collectAsList();
+    assertEquals(1, rows.size());
+    assertEquals(1L, rows.get(0).getLong(0));
+    assertEquals("test", rows.get(0).getString(1));
+
+    // Verify old table no longer exists
+    assertThrows(
+        Exception.class,
+        () -> {
+          spark.sql("SELECT * FROM " + fullOld).collectAsList();
+        });
+  }
+
+  @Test
+  public void testRenameNonExistentTableFails() throws Exception {
+    String oldName = generateTableName("nonexistent");
+    String newName = generateTableName("new_target");
+    String fullOld = catalogName + ".default." + oldName;
+    String fullNew = catalogName + ".default." + newName;
+
+    assertThrows(
+        Exception.class,
+        () -> {
+          spark.sql("ALTER TABLE " + fullOld + " RENAME TO " + fullNew);
+        });
+  }
+
+  @Test
+  public void testRenameTableToExistingNameFails() throws Exception {
+    String name1 = generateTableName("rename_src");
+    String name2 = generateTableName("rename_dst");
+    String full1 = catalogName + ".default." + name1;
+    String full2 = catalogName + ".default." + name2;
+
+    spark.sql("CREATE TABLE " + full1 + " (id BIGINT NOT NULL)");
+    spark.sql("CREATE TABLE " + full2 + " (id BIGINT NOT NULL)");
+
+    // Rename to an existing table name should fail
+    assertThrows(
+        Exception.class,
+        () -> {
+          spark.sql("ALTER TABLE " + full1 + " RENAME TO " + full2);
+        });
+  }
+
   private boolean checkDataset(int expectedSize, String tableName) {
     Dataset<Row> actual = spark.sql("SELECT * FROM " + tableName);
     List<Row> res = actual.collectAsList();

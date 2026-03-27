@@ -22,6 +22,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Test for BaseLanceNamespaceSparkCatalog using DirectoryNamespace implementation. */
@@ -91,5 +92,52 @@ public abstract class BaseTestSparkDirectoryNamespace extends SparkLanceNamespac
     assertTrue(
         foundHashPrefixedDir,
         "Should find a hash-prefixed directory ending with " + expectedSuffix);
+  }
+
+  @Test
+  @Override
+  public void testRenameTable() {
+    String oldName = generateTableName("rename_old");
+    String fullOld = catalogName + ".default." + oldName;
+    String fullNew = catalogName + ".default." + generateTableName("rename_new");
+
+    spark.sql("CREATE TABLE " + fullOld + " (id BIGINT NOT NULL, name STRING)");
+
+    // DirectoryNamespace does not support rename
+    assertThrows(
+        Exception.class,
+        () -> {
+          spark.sql("ALTER TABLE " + fullOld + " RENAME TO " + fullNew);
+        });
+  }
+
+  @Test
+  @Override
+  public void testRenameNonExistentTableFails() {
+    String fullOld = catalogName + ".default." + generateTableName("nonexistent");
+    String fullNew = catalogName + ".default." + generateTableName("new_target");
+
+    assertThrows(
+        Exception.class,
+        () -> {
+          spark.sql("ALTER TABLE " + fullOld + " RENAME TO " + fullNew);
+        });
+  }
+
+  @Test
+  @Override
+  public void testRenameTableToExistingNameFails() {
+    String full1 = catalogName + ".default." + generateTableName("rename_src");
+    String full2 = catalogName + ".default." + generateTableName("rename_dst");
+
+    spark.sql("CREATE TABLE " + full1 + " (id BIGINT NOT NULL)");
+    spark.sql("CREATE TABLE " + full2 + " (id BIGINT NOT NULL)");
+
+    // DirectoryNamespace does not support rename
+    assertThrows(
+        Exception.class,
+        () -> {
+          spark.sql("ALTER TABLE " + full1 + " RENAME TO " + full2);
+        });
   }
 }

@@ -61,8 +61,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -652,7 +654,66 @@ public abstract class BaseLanceNamespaceSparkCatalog
 
   @Override
   public Table alterTable(Identifier ident, TableChange... changes) throws NoSuchTableException {
-    throw new UnsupportedOperationException("Table alteration is not supported");
+    Map<String, String> propsToSet = new HashMap<>();
+    Set<String> keysToRemove = new HashSet<>();
+
+    for (TableChange change : changes) {
+      if (change instanceof TableChange.SetProperty) {
+        TableChange.SetProperty setProp = (TableChange.SetProperty) change;
+        propsToSet.put(setProp.property(), setProp.value());
+      } else if (change instanceof TableChange.RemoveProperty) {
+        TableChange.RemoveProperty removeProp = (TableChange.RemoveProperty) change;
+        keysToRemove.add(removeProp.property());
+      } else {
+        throw new UnsupportedOperationException(
+            "Unsupported table change type: "
+                + change.getClass().getSimpleName()
+                + ". Only SET/UNSET TBLPROPERTIES is supported.");
+      }
+    }
+
+    LanceSparkReadOptions readOptions;
+    if (isPathBasedIdentifier(ident)) {
+      String datasetUri = getDatasetUri(ident);
+      readOptions =
+          createReadOptions(
+              datasetUri,
+              catalogConfig,
+              Optional.empty(),
+              Optional.empty(),
+              Optional.empty(),
+              name);
+    } else {
+      if (pathBasedOnly || namespace == null) {
+        throw new IllegalStateException(
+            "Namespace not configured. Use 'impl' config for namespace-based access.");
+      }
+      Identifier actualIdent = transformIdentifierForApi(ident);
+      List<String> tableIdList = buildTableId(actualIdent);
+      DescribeTableRequest describeRequest = new DescribeTableRequest();
+      tableIdList.forEach(describeRequest::addIdItem);
+      DescribeTableResponse describeResponse = describeTableOrThrow(describeRequest, ident);
+      String location = describeResponse.getLocation();
+      readOptions =
+          createReadOptions(
+              location,
+              catalogConfig,
+              Optional.empty(),
+              Optional.of(namespace),
+              Optional.of(tableIdList),
+              name);
+    }
+
+    try (Dataset dataset = openDataset(readOptions)) {
+      if (!propsToSet.isEmpty()) {
+        dataset.updateConfig(propsToSet);
+      }
+      if (!keysToRemove.isEmpty()) {
+        dataset.deleteConfigKeys(keysToRemove);
+      }
+    }
+
+    return loadTable(ident);
   }
 
   @Override

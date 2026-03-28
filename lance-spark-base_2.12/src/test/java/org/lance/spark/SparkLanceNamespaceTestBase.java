@@ -694,6 +694,58 @@ public abstract class SparkLanceNamespaceTestBase {
         () -> catalog.loadTable(Identifier.of(new String[] {"default"}, "non_existent_table")));
   }
 
+  @Test
+  public void testSetTableProperties() throws Exception {
+    String tableName = generateTableName("set_props");
+    String fullName = catalogName + ".default." + tableName;
+
+    spark.sql("CREATE TABLE " + fullName + " (id BIGINT NOT NULL, name STRING)");
+    spark.sql("ALTER TABLE " + fullName + " SET TBLPROPERTIES ('key1' = 'val1', 'key2' = 'val2')");
+
+    Map<String, String> config = getTableConfig(tableName);
+    assertEquals("val1", config.get("key1"));
+    assertEquals("val2", config.get("key2"));
+  }
+
+  @Test
+  public void testUnsetTableProperties() throws Exception {
+    String tableName = generateTableName("unset_props");
+    String fullName = catalogName + ".default." + tableName;
+
+    spark.sql("CREATE TABLE " + fullName + " (id BIGINT NOT NULL, name STRING)");
+    spark.sql("ALTER TABLE " + fullName + " SET TBLPROPERTIES ('key1' = 'val1', 'key2' = 'val2')");
+    spark.sql("ALTER TABLE " + fullName + " UNSET TBLPROPERTIES ('key1')");
+
+    Map<String, String> config = getTableConfig(tableName);
+    assertFalse(config.containsKey("key1"));
+    assertEquals("val2", config.get("key2"));
+  }
+
+  @Test
+  public void testSetPropertiesOnNonExistentTableFails() {
+    String tableName = generateTableName("nonexistent_props");
+    String fullName = catalogName + ".default." + tableName;
+
+    assertThrows(
+        Exception.class,
+        () -> {
+          spark.sql("ALTER TABLE " + fullName + " SET TBLPROPERTIES ('key1' = 'val1')");
+        });
+  }
+
+  @Test
+  public void testOverwriteExistingProperty() throws Exception {
+    String tableName = generateTableName("overwrite_props");
+    String fullName = catalogName + ".default." + tableName;
+
+    spark.sql("CREATE TABLE " + fullName + " (id BIGINT NOT NULL, name STRING)");
+    spark.sql("ALTER TABLE " + fullName + " SET TBLPROPERTIES ('key1' = 'original')");
+    spark.sql("ALTER TABLE " + fullName + " SET TBLPROPERTIES ('key1' = 'updated')");
+
+    Map<String, String> config = getTableConfig(tableName);
+    assertEquals("updated", config.get("key1"));
+  }
+
   private boolean checkDataset(int expectedSize, String tableName) {
     Dataset<Row> actual = spark.sql("SELECT * FROM " + tableName);
     List<Row> res = actual.collectAsList();
@@ -707,6 +759,15 @@ public abstract class SparkLanceNamespaceTestBase {
     LanceSparkReadOptions readOptions = lanceTable.readOptions();
     try (org.lance.Dataset dataset = openLatestDataset(readOptions)) {
       return dataset.getVersion();
+    }
+  }
+
+  private Map<String, String> getTableConfig(String tableName) throws Exception {
+    Identifier ident = Identifier.of(new String[] {"default"}, tableName);
+    LanceDataset lanceTable = (LanceDataset) catalog.loadTable(ident);
+    LanceSparkReadOptions readOptions = lanceTable.readOptions();
+    try (org.lance.Dataset dataset = openLatestDataset(readOptions)) {
+      return dataset.getConfig();
     }
   }
 

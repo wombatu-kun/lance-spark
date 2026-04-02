@@ -134,9 +134,9 @@ public abstract class BaseSetUnenforcedPrimaryKeyTest {
   public void testSetPrimaryKeyOnNonExistentColumn() {
     createTable();
 
-    Exception exception =
+    IllegalArgumentException exception =
         Assertions.assertThrows(
-            Exception.class,
+            IllegalArgumentException.class,
             () ->
                 spark
                     .sql(
@@ -153,9 +153,9 @@ public abstract class BaseSetUnenforcedPrimaryKeyTest {
   public void testSetPrimaryKeyOnNullableColumn() {
     createTable();
 
-    Exception exception =
+    IllegalArgumentException exception =
         Assertions.assertThrows(
-            Exception.class,
+            IllegalArgumentException.class,
             () ->
                 spark
                     .sql(
@@ -169,14 +169,40 @@ public abstract class BaseSetUnenforcedPrimaryKeyTest {
   }
 
   @Test
+  public void testSetPrimaryKeyOnStructColumn() {
+    spark.sql(
+        String.format(
+            "CREATE TABLE %s (id INT NOT NULL, info STRUCT<first: STRING, last: STRING> NOT NULL)"
+                + " USING lance",
+            fullTable));
+    spark.sql(
+        String.format(
+            "INSERT INTO %s VALUES (1, named_struct('first', 'John', 'last', 'Doe'))", fullTable));
+
+    IllegalArgumentException exception =
+        Assertions.assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                spark
+                    .sql(
+                        String.format(
+                            "ALTER TABLE %s SET UNENFORCED PRIMARY KEY (info)", fullTable))
+                    .collect());
+
+    Assertions.assertTrue(
+        exception.getMessage().contains("not a leaf field"),
+        "Error should mention not a leaf field: " + exception.getMessage());
+  }
+
+  @Test
   public void testSetPrimaryKeyWhenAlreadySet() {
     createTable();
 
     spark.sql(String.format("ALTER TABLE %s SET UNENFORCED PRIMARY KEY (id)", fullTable));
 
-    Exception exception =
+    IllegalStateException exception =
         Assertions.assertThrows(
-            Exception.class,
+            IllegalStateException.class,
             () ->
                 spark
                     .sql(

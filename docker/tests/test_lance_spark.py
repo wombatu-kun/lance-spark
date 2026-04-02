@@ -844,6 +844,205 @@ class TestDDLVacuum:
         assert rows[2].id == 3 and rows[2].value == 350
 
 
+class TestDDLPrimaryKey:
+    """Test DDL SET UNENFORCED PRIMARY KEY operations."""
+
+    def test_set_single_column_primary_key(self, spark):
+        """Test setting a single-column unenforced primary key."""
+        spark.sql("""
+            CREATE TABLE default.test_table (
+                id INT NOT NULL,
+                name STRING NOT NULL,
+                value DOUBLE
+            )
+        """)
+        spark.sql("""
+            INSERT INTO default.test_table VALUES (1, 'Alice', 10.5), (2, 'Bob', 20.3)
+        """)
+
+        result = spark.sql("""
+            ALTER TABLE default.test_table SET UNENFORCED PRIMARY KEY (id)
+        """).collect()
+
+        assert len(result) == 1
+        assert result[0].status == "OK"
+        assert result[0].primary_key_columns == "id"
+
+    def test_set_composite_primary_key(self, spark):
+        """Test setting a composite (multi-column) unenforced primary key."""
+        spark.sql("""
+            CREATE TABLE default.test_table (
+                id INT NOT NULL,
+                name STRING NOT NULL,
+                value DOUBLE
+            )
+        """)
+        spark.sql("""
+            INSERT INTO default.test_table VALUES (1, 'Alice', 10.5), (2, 'Bob', 20.3)
+        """)
+
+        result = spark.sql("""
+            ALTER TABLE default.test_table SET UNENFORCED PRIMARY KEY (id, name)
+        """).collect()
+
+        assert len(result) == 1
+        assert result[0].status == "OK"
+        assert result[0].primary_key_columns == "id, name"
+
+    def test_set_primary_key_on_nonexistent_column(self, spark):
+        """Test that setting PK on a non-existent column raises an error."""
+        spark.sql("""
+            CREATE TABLE default.test_table (
+                id INT NOT NULL,
+                name STRING NOT NULL,
+                value DOUBLE
+            )
+        """)
+
+        with pytest.raises(Exception, match="not found"):
+            spark.sql("""
+                ALTER TABLE default.test_table SET UNENFORCED PRIMARY KEY (nonexistent)
+            """).collect()
+
+    def test_set_primary_key_on_nullable_column(self, spark):
+        """Test that setting PK on a nullable column raises an error."""
+        spark.sql("""
+            CREATE TABLE default.test_table (
+                id INT NOT NULL,
+                name STRING NOT NULL,
+                value DOUBLE
+            )
+        """)
+
+        with pytest.raises(Exception, match="nullable"):
+            spark.sql("""
+                ALTER TABLE default.test_table SET UNENFORCED PRIMARY KEY (value)
+            """).collect()
+
+    def test_set_primary_key_when_already_set(self, spark):
+        """Test that setting PK when one already exists raises an error."""
+        spark.sql("""
+            CREATE TABLE default.test_table (
+                id INT NOT NULL,
+                name STRING NOT NULL,
+                value DOUBLE
+            )
+        """)
+        spark.sql("""
+            INSERT INTO default.test_table VALUES (1, 'Alice', 10.5)
+        """)
+
+        spark.sql("""
+            ALTER TABLE default.test_table SET UNENFORCED PRIMARY KEY (id)
+        """).collect()
+
+        with pytest.raises(Exception, match="already has unenforced primary key"):
+            spark.sql("""
+                ALTER TABLE default.test_table SET UNENFORCED PRIMARY KEY (name)
+            """).collect()
+
+    def test_data_readable_after_primary_key_set(self, spark):
+        """Test that data is still fully readable after setting PK."""
+        spark.sql("""
+            CREATE TABLE default.test_table (
+                id INT NOT NULL,
+                name STRING NOT NULL,
+                value DOUBLE
+            )
+        """)
+        spark.sql("""
+            INSERT INTO default.test_table VALUES
+            (1, 'Alice', 10.5),
+            (2, 'Bob', 20.3),
+            (3, 'Charlie', 30.1)
+        """)
+
+        spark.sql("""
+            ALTER TABLE default.test_table SET UNENFORCED PRIMARY KEY (id)
+        """).collect()
+
+        result = spark.sql("""
+            SELECT id, name, value FROM default.test_table ORDER BY id
+        """).collect()
+
+        assert len(result) == 3
+        assert result[0].id == 1
+        assert result[0].name == "Alice"
+        assert result[0].value == 10.5
+        assert result[2].id == 3
+        assert result[2].name == "Charlie"
+        assert result[2].value == 30.1
+
+    def test_primary_key_persists_after_optimize(self, spark):
+        """Test that PK metadata survives an OPTIMIZE operation."""
+        spark.sql("""
+            CREATE TABLE default.test_table (
+                id INT NOT NULL,
+                name STRING NOT NULL,
+                value DOUBLE
+            )
+        """)
+
+        # Insert multiple batches to create fragments worth optimizing
+        for batch in range(3):
+            spark.sql(f"""
+                INSERT INTO default.test_table VALUES
+                ({batch * 10 + 1}, 'Name{batch * 10 + 1}', {float(batch * 10 + 1)}),
+                ({batch * 10 + 2}, 'Name{batch * 10 + 2}', {float(batch * 10 + 2)})
+            """)
+
+        spark.sql("""
+            ALTER TABLE default.test_table SET UNENFORCED PRIMARY KEY (id)
+        """).collect()
+
+        spark.sql("OPTIMIZE default.test_table").collect()
+
+        # PK should still be set -- setting it again should fail
+        with pytest.raises(Exception, match="already has unenforced primary key"):
+            spark.sql("""
+                ALTER TABLE default.test_table SET UNENFORCED PRIMARY KEY (id)
+            """).collect()
+
+        # Data should still be readable
+        count = spark.sql("SELECT * FROM default.test_table").collect()
+        assert len(count) == 6
+
+    def test_primary_key_persists_after_insert(self, spark):
+        """Test that PK metadata survives new data being inserted after PK is set."""
+        spark.sql("""
+            CREATE TABLE default.test_table (
+                id INT NOT NULL,
+                name STRING NOT NULL,
+                value DOUBLE
+            )
+        """)
+        spark.sql("""
+            INSERT INTO default.test_table VALUES (1, 'Alice', 10.5)
+        """)
+
+        spark.sql("""
+            ALTER TABLE default.test_table SET UNENFORCED PRIMARY KEY (id)
+        """).collect()
+
+        # Insert new data after PK is set
+        spark.sql("""
+            INSERT INTO default.test_table VALUES (2, 'Bob', 20.3), (3, 'Charlie', 30.1)
+        """)
+
+        # PK should still be set -- setting it again should fail
+        with pytest.raises(Exception, match="already has unenforced primary key"):
+            spark.sql("""
+                ALTER TABLE default.test_table SET UNENFORCED PRIMARY KEY (name)
+            """).collect()
+
+        # All data should be readable
+        result = spark.sql("""
+            SELECT id FROM default.test_table ORDER BY id
+        """).collect()
+        assert len(result) == 3
+        assert [row.id for row in result] == [1, 2, 3]
+
+
 # =============================================================================
 # DQL (Data Query Language) Tests
 # =============================================================================

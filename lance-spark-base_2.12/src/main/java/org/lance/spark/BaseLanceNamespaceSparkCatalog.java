@@ -736,7 +736,28 @@ public abstract class BaseLanceNamespaceSparkCatalog
       request.addNewNamespaceIdItem(part);
     }
 
-    namespace.renameTable(request);
+    try {
+      namespace.renameTable(request);
+    } catch (LanceNamespaceException e) {
+      if (e.getErrorCode() == ErrorCode.TABLE_NOT_FOUND) {
+        throw new NoSuchTableException(oldIdent);
+      }
+      if (e.getErrorCode() == ErrorCode.TABLE_ALREADY_EXISTS) {
+        throw new TableAlreadyExistsException(newIdent);
+      }
+      throw e;
+    } catch (RuntimeException e) {
+      String msg = e.getMessage();
+      if (msg != null
+          && (msg.contains("Table does not exist")
+              || (msg.contains("Table") && msg.contains("not found")))) {
+        throw new NoSuchTableException(oldIdent);
+      }
+      if (msg != null && msg.contains("already exists")) {
+        throw new TableAlreadyExistsException(newIdent);
+      }
+      throw e;
+    }
   }
 
   @Override

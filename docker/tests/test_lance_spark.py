@@ -121,6 +121,108 @@ class TestDDLTable:
         assert "test_table" not in table_names
 
 
+class TestDDLRenameTable:
+    """Test ALTER TABLE ... RENAME TO operations.
+
+    DirectoryNamespace (``impl=dir``) does not support rename — tests on local,
+    Azurite, and MinIO backends verify error behaviour.  On LanceDB Cloud
+    (``impl=rest``), rename is supported and the happy-path is exercised.
+    """
+
+    def _is_dir_backend(self, spark):
+        return getattr(spark, "_lance_backend", None) != "lancedb"
+
+    def test_rename_table(self, spark):
+        """Rename succeeds on REST impl, fails on dir impl."""
+        spark.sql("""
+            CREATE TABLE default.test_table (
+                id INT,
+                name STRING
+            )
+        """)
+        spark.sql("INSERT INTO default.test_table VALUES (1, 'Alice'), (2, 'Bob')")
+
+        if self._is_dir_backend(spark):
+            with pytest.raises(Exception, match="Not supported: renameTable"):
+                spark.sql(
+                    "ALTER TABLE default.test_table RENAME TO default.test_table_renamed"
+                )
+            # Original table still readable after failure
+            result = spark.table("default.test_table").collect()
+            assert len(result) == 2
+        else:
+            spark.sql(
+                "ALTER TABLE default.test_table RENAME TO default.test_table_renamed"
+            )
+            # Data preserved under new name
+            result = spark.table("default.test_table_renamed").orderBy("id").collect()
+            assert len(result) == 2
+            assert result[0].id == 1
+            assert result[0].name == "Alice"
+            assert result[1].id == 2
+            assert result[1].name == "Bob"
+            # Old name no longer accessible
+            with pytest.raises(Exception, match="TABLE_OR_VIEW_NOT_FOUND"):
+                spark.sql("SELECT * FROM default.test_table")
+
+    def test_rename_nonexistent_table_fails(self, spark):
+        """Renaming a non-existent table should fail with AnalysisException."""
+        with pytest.raises(Exception, match="TABLE_OR_VIEW_NOT_FOUND"):
+            spark.sql(
+                "ALTER TABLE default.nonexistent_table RENAME TO default.new_table"
+            )
+
+    def test_rename_to_existing_name_fails(self, spark):
+        """Renaming to an already-existing table name should fail."""
+        spark.sql("CREATE TABLE default.test_table (id INT)")
+        spark.sql("CREATE TABLE default.test_table_renamed (id INT)")
+
+        if self._is_dir_backend(spark):
+            with pytest.raises(Exception, match="Not supported: renameTable"):
+                spark.sql(
+                    "ALTER TABLE default.test_table RENAME TO default.test_table_renamed"
+                )
+        else:
+            with pytest.raises(Exception, match="TABLE_ALREADY_EXISTS"):
+                spark.sql(
+                    "ALTER TABLE default.test_table RENAME TO default.test_table_renamed"
+                )
+
+    def test_rename_preserves_schema_and_data(self, spark):
+        """After rename, schema and all data rows are intact."""
+        if self._is_dir_backend(spark):
+            pytest.skip("rename not supported on dir impl")
+
+        spark.sql("""
+            CREATE TABLE default.test_table (
+                id INT,
+                name STRING,
+                value DOUBLE
+            )
+        """)
+        data = [(1, "Alice", 10.5), (2, "Bob", 20.3), (3, "Charlie", 30.1)]
+        df = spark.createDataFrame(data, ["id", "name", "value"])
+        df.writeTo("default.test_table").append()
+
+        spark.sql("ALTER TABLE default.test_table RENAME TO default.test_table_renamed")
+
+        # Verify schema
+        schema = spark.sql("DESCRIBE TABLE default.test_table_renamed").collect()
+        col_names = [
+            row.col_name for row in schema
+            if row.col_name and not row.col_name.startswith("#")
+        ]
+        assert "id" in col_names
+        assert "name" in col_names
+        assert "value" in col_names
+
+        # Verify data
+        result = spark.table("default.test_table_renamed").orderBy("id").collect()
+        assert len(result) == 3
+        assert result[0].name == "Alice"
+        assert result[2].value == 30.1
+
+
 class TestDDLStagingTable:
     """Test DDL staging table operations: CREATE TABLE AS SELECT, REPLACE TABLE, CREATE OR REPLACE TABLE."""
 

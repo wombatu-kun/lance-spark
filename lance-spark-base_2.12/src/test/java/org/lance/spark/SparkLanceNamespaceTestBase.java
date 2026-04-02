@@ -774,11 +774,13 @@ public abstract class SparkLanceNamespaceTestBase {
     // The catalog's renameTable() translates the Lance TABLE_ALREADY_EXISTS error into Spark's
     // TableAlreadyExistsException. Spark then re-throws as AnalysisException — the original
     // catalog exception is not preserved as a cause.
-    assertThrows(
-        AnalysisException.class,
-        () -> {
-          spark.sql("ALTER TABLE " + full1 + " RENAME TO " + full2);
-        });
+    AnalysisException ex =
+        assertThrows(
+            AnalysisException.class,
+            () -> {
+              spark.sql("ALTER TABLE " + full1 + " RENAME TO " + full2);
+            });
+    assertEquals("TABLE_ALREADY_EXISTS", ex.getErrorClass());
   }
 
   private boolean checkDataset(int expectedSize, String tableName) {

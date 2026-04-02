@@ -13,6 +13,9 @@
  */
 package org.lance.spark;
 
+import org.lance.namespace.errors.UnsupportedOperationException;
+
+import org.apache.spark.sql.AnalysisException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -21,6 +24,7 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -103,12 +107,18 @@ public abstract class BaseTestSparkDirectoryNamespace extends SparkLanceNamespac
 
     spark.sql("CREATE TABLE " + fullOld + " (id BIGINT NOT NULL, name STRING)");
 
-    // DirectoryNamespace does not support rename
-    assertThrows(
-        Exception.class,
-        () -> {
-          spark.sql("ALTER TABLE " + fullOld + " RENAME TO " + fullNew);
-        });
+    // DirectoryNamespace does not support rename. The Lance namespace layer throws
+    // o.l.n.e.UnsupportedOperationException directly — Spark does not intercept or
+    // wrap this exception type, so it propagates as-is.
+    UnsupportedOperationException ex1 =
+        assertThrows(
+            UnsupportedOperationException.class,
+            () -> {
+              spark.sql("ALTER TABLE " + fullOld + " RENAME TO " + fullNew);
+            });
+    assertTrue(
+        ex1.getMessage().contains("Not supported: renameTable"),
+        "Expected 'Not supported: renameTable' but got: " + ex1.getMessage());
   }
 
   @Test
@@ -117,11 +127,17 @@ public abstract class BaseTestSparkDirectoryNamespace extends SparkLanceNamespac
     String fullOld = catalogName + ".default." + generateTableName("nonexistent");
     String fullNew = catalogName + ".default." + generateTableName("new_target");
 
-    assertThrows(
-        Exception.class,
-        () -> {
-          spark.sql("ALTER TABLE " + fullOld + " RENAME TO " + fullNew);
-        });
+    // Spark's analyzer resolves the source table before the rename execution plan runs.
+    // When the table doesn't exist, the analyzer throws ExtendedAnalysisException with
+    // TABLE_OR_VIEW_NOT_FOUND — the catalog's renameTable() is never reached,
+    // so the "unsupported" error is never triggered.
+    AnalysisException ex =
+        assertThrows(
+            AnalysisException.class,
+            () -> {
+              spark.sql("ALTER TABLE " + fullOld + " RENAME TO " + fullNew);
+            });
+    assertEquals("TABLE_OR_VIEW_NOT_FOUND", ex.getErrorClass());
   }
 
   @Test
@@ -133,11 +149,17 @@ public abstract class BaseTestSparkDirectoryNamespace extends SparkLanceNamespac
     spark.sql("CREATE TABLE " + full1 + " (id BIGINT NOT NULL)");
     spark.sql("CREATE TABLE " + full2 + " (id BIGINT NOT NULL)");
 
-    // DirectoryNamespace does not support rename
-    assertThrows(
-        Exception.class,
-        () -> {
-          spark.sql("ALTER TABLE " + full1 + " RENAME TO " + full2);
-        });
+    // DirectoryNamespace does not support rename — same error regardless of whether
+    // the target exists. The Lance namespace layer rejects the operation before
+    // checking for conflicts.
+    UnsupportedOperationException ex =
+        assertThrows(
+            UnsupportedOperationException.class,
+            () -> {
+              spark.sql("ALTER TABLE " + full1 + " RENAME TO " + full2);
+            });
+    assertTrue(
+        ex.getMessage().contains("Not supported: renameTable"),
+        "Expected 'Not supported: renameTable' but got: " + ex.getMessage());
   }
 }

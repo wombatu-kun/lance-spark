@@ -680,12 +680,12 @@ public abstract class BaseLanceNamespaceSparkCatalog
     ResolvedTable resolved = resolveIdentifier(ident);
 
     try (Dataset dataset = openDataset(resolved.readOptions)) {
-      if (!propsToSet.isEmpty()) {
-        dataset.updateConfig(propsToSet);
-      }
-      if (!keysToRemove.isEmpty()) {
-        dataset.deleteConfigKeys(keysToRemove);
-      }
+      // Dataset.updateConfig uses replace semantics (overwrites entire config),
+      // so we must read-merge-write to preserve existing properties.
+      Map<String, String> merged = new HashMap<>(dataset.getConfig());
+      merged.putAll(propsToSet);
+      keysToRemove.forEach(merged::remove);
+      dataset.updateConfig(merged);
     }
 
     return loadTable(ident);

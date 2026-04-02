@@ -22,6 +22,7 @@ import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.catalyst.analysis.NoSuchTableException;
 import org.apache.spark.sql.connector.catalog.Identifier;
 import org.apache.spark.sql.connector.catalog.TableCatalog;
+import org.apache.spark.sql.connector.catalog.TableChange;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -766,6 +767,77 @@ public abstract class SparkLanceNamespaceTestBase {
     Map<String, String> config = getTableConfig(tableName);
     assertEquals("val1", config.get("key1"));
     assertEquals("val2", config.get("key2"));
+  }
+
+  @Test
+  public void testUnsetNonExistentProperty() throws Exception {
+    String tableName = generateTableName("unset_missing");
+    String fullName = catalogName + ".default." + tableName;
+
+    spark.sql("CREATE TABLE " + fullName + " (id BIGINT NOT NULL, name STRING)");
+    spark.sql("ALTER TABLE " + fullName + " SET TBLPROPERTIES ('key1' = 'val1')");
+
+    // Unsetting a property that was never set should not fail
+    spark.sql("ALTER TABLE " + fullName + " UNSET TBLPROPERTIES ('nonexistent_key')");
+
+    Map<String, String> config = getTableConfig(tableName);
+    assertEquals("val1", config.get("key1"));
+  }
+
+  @Test
+  public void testSetAndUnsetViaAlterTableApi() throws Exception {
+    String tableName = generateTableName("set_unset_api");
+    String fullName = catalogName + ".default." + tableName;
+
+    spark.sql("CREATE TABLE " + fullName + " (id BIGINT NOT NULL, name STRING)");
+    spark.sql("ALTER TABLE " + fullName + " SET TBLPROPERTIES ('a' = '1', 'b' = '2', 'c' = '3')");
+
+    // Call alterTable with both SET and UNSET changes in one invocation
+    Identifier ident = Identifier.of(new String[] {"default"}, tableName);
+    catalog.alterTable(ident, TableChange.setProperty("d", "4"), TableChange.removeProperty("b"));
+
+    Map<String, String> config = getTableConfig(tableName);
+    assertEquals("1", config.get("a"));
+    assertFalse(config.containsKey("b"));
+    assertEquals("3", config.get("c"));
+    assertEquals("4", config.get("d"));
+  }
+
+  @Test
+  public void testPropertiesSurviveDataOperations() throws Exception {
+    String tableName = generateTableName("props_survive");
+    String fullName = catalogName + ".default." + tableName;
+
+    spark.sql("CREATE TABLE " + fullName + " (id BIGINT NOT NULL, name STRING)");
+    spark.sql("ALTER TABLE " + fullName + " SET TBLPROPERTIES ('key1' = 'val1')");
+
+    // Perform data operations
+    spark.sql("INSERT INTO " + fullName + " VALUES (1, 'Alice')");
+    spark.sql("INSERT INTO " + fullName + " VALUES (2, 'Bob')");
+
+    // Properties should still be present after data operations
+    Map<String, String> config = getTableConfig(tableName);
+    assertEquals("val1", config.get("key1"));
+  }
+
+  @Test
+  public void testUnsupportedTableChangeThrows() throws Exception {
+    String tableName = generateTableName("unsupported_change");
+    String fullName = catalogName + ".default." + tableName;
+
+    spark.sql("CREATE TABLE " + fullName + " (id BIGINT NOT NULL, name STRING)");
+
+    Identifier ident = Identifier.of(new String[] {"default"}, tableName);
+    UnsupportedOperationException ex =
+        assertThrows(
+            UnsupportedOperationException.class,
+            () -> {
+              catalog.alterTable(
+                  ident,
+                  TableChange.addColumn(
+                      new String[] {"new_col"}, org.apache.spark.sql.types.DataTypes.StringType));
+            });
+    assertTrue(ex.getMessage().contains("Only SET/UNSET TBLPROPERTIES is supported"));
   }
 
   private boolean checkDataset(int expectedSize, String tableName) {

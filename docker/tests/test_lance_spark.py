@@ -317,6 +317,115 @@ class TestDDLStagingTable:
         assert "value" not in col_names
 
 
+class TestDDLAlterTableProperties:
+    """Test ALTER TABLE SET/UNSET TBLPROPERTIES operations."""
+
+    def test_set_tblproperties_enable_stable_row_ids(self, spark):
+        """SET TBLPROPERTIES can enable stable row IDs on an existing table."""
+        spark.sql("""
+            CREATE TABLE default.test_table (id INT, name STRING, value INT)
+        """)
+        spark.sql("""
+            ALTER TABLE default.test_table
+            SET TBLPROPERTIES ('enable_stable_row_ids' = 'true')
+        """)
+        spark.sql("""
+            INSERT INTO default.test_table VALUES (1, 'Alice', 100), (2, 'Bob', 200)
+        """)
+
+        result = spark.sql("""
+            SELECT id, _row_created_at_version, _row_last_updated_at_version
+            FROM default.test_table ORDER BY id
+        """).collect()
+
+        assert len(result) == 2
+        for row in result:
+            assert row._row_created_at_version > 1
+            assert row._row_last_updated_at_version > 1
+
+    def test_unset_tblproperties(self, spark):
+        """UNSET TBLPROPERTIES removes a previously set property."""
+        spark.sql("""
+            CREATE TABLE default.test_table (id INT, value INT)
+            TBLPROPERTIES ('enable_stable_row_ids' = 'true')
+        """)
+        spark.sql("""
+            ALTER TABLE default.test_table
+            UNSET TBLPROPERTIES ('enable_stable_row_ids')
+        """)
+        spark.sql("INSERT INTO default.test_table VALUES (1, 100)")
+
+        result = spark.sql("""
+            SELECT _row_created_at_version, _row_last_updated_at_version
+            FROM default.test_table
+        """).collect()
+
+        assert len(result) == 1
+        assert result[0]._row_created_at_version == 1
+        assert result[0]._row_last_updated_at_version == 1
+
+    def test_set_custom_properties(self, spark):
+        """SET TBLPROPERTIES with custom key-value pairs does not break the table."""
+        spark.sql("CREATE TABLE default.test_table (id INT, name STRING)")
+        spark.sql("""
+            ALTER TABLE default.test_table
+            SET TBLPROPERTIES ('team' = 'data-eng', 'version' = '2.0')
+        """)
+
+        spark.sql("INSERT INTO default.test_table VALUES (1, 'test')")
+        result = spark.sql("SELECT * FROM default.test_table").collect()
+
+        assert len(result) == 1
+        assert result[0].id == 1
+
+    def test_overwrite_existing_property(self, spark):
+        """SET TBLPROPERTIES overwrites an existing property value."""
+        spark.sql("""
+            CREATE TABLE default.test_table (id INT, value INT)
+            TBLPROPERTIES ('enable_stable_row_ids' = 'true')
+        """)
+        spark.sql("""
+            ALTER TABLE default.test_table
+            SET TBLPROPERTIES ('enable_stable_row_ids' = 'false')
+        """)
+        spark.sql("INSERT INTO default.test_table VALUES (1, 100)")
+
+        result = spark.sql("""
+            SELECT _row_created_at_version FROM default.test_table
+        """).collect()
+
+        assert result[0]._row_created_at_version == 1
+
+    def test_set_properties_on_nonexistent_table(self, spark):
+        """SET TBLPROPERTIES on non-existent table raises an error."""
+        with pytest.raises(Exception) as exc_info:
+            spark.sql("""
+                ALTER TABLE default.nonexistent_props_table
+                SET TBLPROPERTIES ('key' = 'value')
+            """)
+        assert "TABLE_OR_VIEW_NOT_FOUND" in str(exc_info.value)
+
+    def test_properties_persist_after_insert(self, spark):
+        """Table properties are not lost after DML operations."""
+        spark.sql("CREATE TABLE default.test_table (id INT, value INT)")
+        spark.sql("""
+            ALTER TABLE default.test_table
+            SET TBLPROPERTIES ('enable_stable_row_ids' = 'true')
+        """)
+
+        spark.sql("INSERT INTO default.test_table VALUES (1, 100)")
+        spark.sql("INSERT INTO default.test_table VALUES (2, 200)")
+
+        result = spark.sql("""
+            SELECT id, _row_created_at_version
+            FROM default.test_table ORDER BY id
+        """).collect()
+
+        assert len(result) == 2
+        for row in result:
+            assert row._row_created_at_version > 1
+
+
 class TestDDLIndex:
     """Test DDL index operations: CREATE INDEX (BTree, FTS)."""
 

@@ -15,6 +15,7 @@ package org.lance.spark;
 
 import org.lance.Version;
 
+import org.apache.spark.sql.AnalysisException;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
@@ -726,11 +727,15 @@ public abstract class SparkLanceNamespaceTestBase {
     String tableName = generateTableName("nonexistent_props");
     String fullName = catalogName + ".default." + tableName;
 
-    assertThrows(
-        Exception.class,
-        () -> {
-          spark.sql("ALTER TABLE " + fullName + " SET TBLPROPERTIES ('key1' = 'val1')");
-        });
+    // When the table doesn't exist, it throws ExtendedAnalysisException with
+    // TABLE_OR_VIEW_NOT_FOUND — the catalog's renameTable() is never reached.
+    AnalysisException ex =
+        assertThrows(
+            AnalysisException.class,
+            () -> {
+              spark.sql("ALTER TABLE " + fullName + " SET TBLPROPERTIES ('key1' = 'val1')");
+            });
+    assertEquals("TABLE_OR_VIEW_NOT_FOUND", ex.getErrorClass());
   }
 
   @Test
@@ -744,6 +749,23 @@ public abstract class SparkLanceNamespaceTestBase {
 
     Map<String, String> config = getTableConfig(tableName);
     assertEquals("updated", config.get("key1"));
+  }
+
+  @Test
+  public void testAlterTableWithEmptyChanges() throws Exception {
+    String tableName = generateTableName("empty_changes");
+    String fullName = catalogName + ".default." + tableName;
+
+    spark.sql("CREATE TABLE " + fullName + " (id BIGINT NOT NULL, name STRING)");
+    spark.sql("ALTER TABLE " + fullName + " SET TBLPROPERTIES ('key1' = 'val1', 'key2' = 'val2')");
+
+    // Call alterTable with no changes — should be a no-op
+    Identifier ident = Identifier.of(new String[] {"default"}, tableName);
+    catalog.alterTable(ident);
+
+    Map<String, String> config = getTableConfig(tableName);
+    assertEquals("val1", config.get("key1"));
+    assertEquals("val2", config.get("key2"));
   }
 
   private boolean checkDataset(int expectedSize, String tableName) {

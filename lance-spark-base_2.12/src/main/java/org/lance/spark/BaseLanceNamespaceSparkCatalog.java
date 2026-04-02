@@ -672,39 +672,14 @@ public abstract class BaseLanceNamespaceSparkCatalog
       }
     }
 
-    LanceSparkReadOptions readOptions;
-    if (isPathBasedIdentifier(ident)) {
-      String datasetUri = getDatasetUri(ident);
-      readOptions =
-          createReadOptions(
-              datasetUri,
-              catalogConfig,
-              Optional.empty(),
-              Optional.empty(),
-              Optional.empty(),
-              name);
-    } else {
-      if (pathBasedOnly || namespace == null) {
-        throw new IllegalStateException(
-            "Namespace not configured. Use 'impl' config for namespace-based access.");
-      }
-      Identifier actualIdent = transformIdentifierForApi(ident);
-      List<String> tableIdList = buildTableId(actualIdent);
-      DescribeTableRequest describeRequest = new DescribeTableRequest();
-      tableIdList.forEach(describeRequest::addIdItem);
-      DescribeTableResponse describeResponse = describeTableOrThrow(describeRequest, ident);
-      String location = describeResponse.getLocation();
-      readOptions =
-          createReadOptions(
-              location,
-              catalogConfig,
-              Optional.empty(),
-              Optional.of(namespace),
-              Optional.of(tableIdList),
-              name);
+    if (propsToSet.isEmpty() && keysToRemove.isEmpty()) {
+      // No changes to apply, just return the current table
+      return loadTable(ident);
     }
 
-    try (Dataset dataset = openDataset(readOptions)) {
+    ResolvedTable resolved = resolveIdentifier(ident);
+
+    try (Dataset dataset = openDataset(resolved.readOptions)) {
       if (!propsToSet.isEmpty()) {
         dataset.updateConfig(propsToSet);
       }
@@ -866,46 +841,26 @@ public abstract class BaseLanceNamespaceSparkCatalog
       return stageReplaceAtPath(ident, schema, properties);
     }
 
-    // Require namespace to be configured for namespace-based access
-    if (pathBasedOnly || namespace == null) {
-      throw new IllegalStateException(
-          "Namespace not configured. Use 'impl' config for namespace-based access.");
-    }
-
-    Identifier actualIdent = transformIdentifierForApi(ident);
-    List<String> tableIdList = buildTableId(actualIdent);
+    ResolvedTable resolved = resolveIdentifier(ident);
+    DescribeTableResponse describeResponse = resolved.describeResponse;
     StructType processedSchema = SchemaConverter.processSchemaWithProperties(schema, properties);
-
-    DescribeTableRequest describeRequest = new DescribeTableRequest();
-    tableIdList.forEach(describeRequest::addIdItem);
-    DescribeTableResponse describeResponse = describeTableOrThrow(describeRequest, ident);
-    String location = describeResponse.getLocation();
     Map<String, String> initialStorageOptions = describeResponse.getStorageOptions();
     boolean managedVersioning = Boolean.TRUE.equals(describeResponse.getManagedVersioning());
 
-    LanceSparkReadOptions readOptions =
-        createReadOptions(
-            location,
-            catalogConfig,
-            Optional.empty(),
-            Optional.of(namespace),
-            Optional.of(tableIdList),
-            name);
-
     Schema arrowSchema = LanceArrowUtils.toArrowSchema(processedSchema, "UTC", true);
-    Dataset ds = openDataset(readOptions);
+    Dataset ds = openDataset(resolved.readOptions);
     Map<String, String> merged =
         LanceRuntime.mergeStorageOptions(catalogConfig.getStorageOptions(), initialStorageOptions);
     StagedCommit stagedCommit =
         StagedCommit.forExistingTable(
-            ds, arrowSchema, merged, namespace, tableIdList, managedVersioning);
+            ds, arrowSchema, merged, namespace, resolved.tableIdList, managedVersioning);
     // Use specified file format version, or fall back to existing table's version
     String fileFormatVersion = catalogConfig.getFileFormatVersion(properties);
     if (fileFormatVersion == null) {
       fileFormatVersion = ds.getLanceFileFormatVersion();
     }
     return createStagedDataset(
-        readOptions,
+        resolved.readOptions,
         processedSchema,
         initialStorageOptions,
         namespaceImpl,
@@ -1060,6 +1015,71 @@ public abstract class BaseLanceNamespaceSparkCatalog
   }
 
   /**
+   * Result of resolving an {@link Identifier} to read options. Bundles the read options with the
+   * optional {@link DescribeTableResponse} (present only for namespace-based identifiers).
+   */
+  private static class ResolvedTable {
+    final LanceSparkReadOptions readOptions;
+
+    /** Non-null only for namespace-based tables. */
+    final DescribeTableResponse describeResponse;
+
+    /** Non-null only for namespace-based tables. */
+    final List<String> tableIdList;
+
+    ResolvedTable(
+        LanceSparkReadOptions readOptions,
+        DescribeTableResponse describeResponse,
+        List<String> tableIdList) {
+      this.readOptions = readOptions;
+      this.describeResponse = describeResponse;
+      this.tableIdList = tableIdList;
+    }
+  }
+
+  /**
+   * Resolves an identifier into {@link LanceSparkReadOptions} by handling both path-based and
+   * namespace-based access patterns. For namespace-based identifiers the {@link
+   * DescribeTableResponse} is also returned so callers can access additional metadata such as
+   * storage options and managed-versioning flags.
+   */
+  private ResolvedTable resolveIdentifier(Identifier ident) throws NoSuchTableException {
+    if (isPathBasedIdentifier(ident)) {
+      String datasetUri = getDatasetUri(ident);
+      LanceSparkReadOptions readOptions =
+          createReadOptions(
+              datasetUri,
+              catalogConfig,
+              Optional.empty(),
+              Optional.empty(),
+              Optional.empty(),
+              name);
+      return new ResolvedTable(readOptions, null, null);
+    }
+
+    if (pathBasedOnly || namespace == null) {
+      throw new IllegalStateException(
+          "Namespace not configured. Use 'impl' config for namespace-based access.");
+    }
+
+    Identifier actualIdent = transformIdentifierForApi(ident);
+    List<String> tableIdList = buildTableId(actualIdent);
+    DescribeTableRequest describeRequest = new DescribeTableRequest();
+    tableIdList.forEach(describeRequest::addIdItem);
+    DescribeTableResponse describeResponse = describeTableOrThrow(describeRequest, ident);
+    String location = describeResponse.getLocation();
+    LanceSparkReadOptions readOptions =
+        createReadOptions(
+            location,
+            catalogConfig,
+            Optional.empty(),
+            Optional.of(namespace),
+            Optional.of(tableIdList),
+            name);
+    return new ResolvedTable(readOptions, describeResponse, tableIdList);
+  }
+
+  /**
    * Removes the virtual "default" prefix from a Spark identifier in single-level mode. For example:
    * - ["default", "table"] -> ["table"] - ["default"] -> [] (root namespace) - ["other", "table"]
    * -> ["other", "table"] (unchanged)
@@ -1187,36 +1207,13 @@ public abstract class BaseLanceNamespaceSparkCatalog
       return loadTableFromPath(ident, timestamp, version);
     }
 
-    // Require namespace to be configured for namespace-based access
-    if (pathBasedOnly || namespace == null) {
-      throw new IllegalStateException(
-          "Namespace not configured. Use 'impl' config for namespace-based access.");
-    }
-
-    // Transform identifier for API call
-    Identifier actualIdent = transformIdentifierForApi(ident);
-
-    // Build the table ID for credential vending
-    List<String> tableId = buildTableId(actualIdent);
-
-    // Call describeTable to get location and initial storage options
-    DescribeTableRequest describeRequest = new DescribeTableRequest();
-    tableId.forEach(describeRequest::addIdItem);
-    DescribeTableResponse describeResponse = describeTableOrThrow(describeRequest, ident);
-    String location = describeResponse.getLocation();
+    ResolvedTable resolved = resolveIdentifier(ident);
+    DescribeTableResponse describeResponse = resolved.describeResponse;
     Map<String, String> initialStorageOptions = describeResponse.getStorageOptions();
 
     Optional<Long> versionId = Optional.empty();
     if (timestamp.isPresent()) {
-      LanceSparkReadOptions readOptions =
-          createReadOptions(
-              location,
-              catalogConfig,
-              Optional.empty(),
-              Optional.of(namespace),
-              Optional.of(tableId),
-              name);
-      try (Dataset dataset = openDataset(readOptions)) {
+      try (Dataset dataset = openDataset(resolved.readOptions)) {
         versionId = Optional.of(Utils.findVersion(dataset.listVersions(), timestamp.get()));
       } catch (TableNotFoundException e) {
         throw new NoSuchTableException(ident);
@@ -1225,9 +1222,20 @@ public abstract class BaseLanceNamespaceSparkCatalog
       versionId = Optional.of(Utils.parseVersion(version.get()));
     }
 
-    LanceSparkReadOptions readOptions =
-        createReadOptions(
-            location, catalogConfig, versionId, Optional.of(namespace), Optional.of(tableId), name);
+    // If time travel requested, rebuild readOptions with the resolved version
+    LanceSparkReadOptions readOptions;
+    if (versionId.isPresent()) {
+      readOptions =
+          createReadOptions(
+              describeResponse.getLocation(),
+              catalogConfig,
+              versionId,
+              Optional.of(namespace),
+              Optional.of(resolved.tableIdList),
+              name);
+    } else {
+      readOptions = resolved.readOptions;
+    }
 
     // Read schema and file format version from the dataset
     String fileFormatVersion;

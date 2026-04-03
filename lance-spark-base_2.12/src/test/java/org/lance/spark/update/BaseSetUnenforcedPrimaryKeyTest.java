@@ -219,8 +219,11 @@ public abstract class BaseSetUnenforcedPrimaryKeyTest {
     if (field.isUnenforcedPrimaryKey()) {
       return true;
     }
-    String value = field.getMetadata().get("lance-schema:unenforced-primary-key");
-    return "true".equalsIgnoreCase(value);
+    Map<String, String> metadata = field.getMetadata();
+    if (metadata == null) {
+      return false;
+    }
+    return "true".equalsIgnoreCase(metadata.get("lance-schema:unenforced-primary-key"));
   }
 
   private static void assertPrimaryKey(LanceField field, String expectedPosition) {

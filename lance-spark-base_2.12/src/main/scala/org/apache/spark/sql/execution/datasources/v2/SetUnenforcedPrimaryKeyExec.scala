@@ -24,6 +24,12 @@ import org.lance.spark.{LanceDataset, LanceRuntime, LanceSparkReadOptions}
 
 import scala.collection.JavaConverters._
 
+object SetUnenforcedPrimaryKeyExec {
+  val METADATA_KEY_PK = "lance-schema:unenforced-primary-key"
+  val METADATA_KEY_PK_POSITION =
+    "lance-schema:unenforced-primary-key:position"
+}
+
 case class SetUnenforcedPrimaryKeyExec(
     catalog: TableCatalog,
     ident: Identifier,
@@ -44,6 +50,15 @@ case class SetUnenforcedPrimaryKeyExec(
     try {
       val lanceSchema = dataset.getLanceSchema
       val allFields = lanceSchema.fields().asScala.toSeq
+
+      // Validate no duplicate columns
+      val duplicates = columns.groupBy(identity).collect {
+        case (name, occurrences) if occurrences.size > 1 => name
+      }
+      if (duplicates.nonEmpty) {
+        throw new IllegalArgumentException(
+          s"Duplicate columns in primary key: ${duplicates.mkString(", ")}")
+      }
 
       // Validate columns exist
       val fieldsByName = allFields.map(f => (f.getName, f)).toMap
@@ -84,9 +99,9 @@ case class SetUnenforcedPrimaryKeyExec(
         new java.util.HashMap[java.lang.Integer, UpdateMap]()
       resolvedFields.zipWithIndex.foreach { case (field, idx) =>
         val metadataMap = new java.util.HashMap[String, String]()
-        metadataMap.put("lance-schema:unenforced-primary-key", "true")
+        metadataMap.put(SetUnenforcedPrimaryKeyExec.METADATA_KEY_PK, "true")
         metadataMap.put(
-          "lance-schema:unenforced-primary-key:position",
+          SetUnenforcedPrimaryKeyExec.METADATA_KEY_PK_POSITION,
           (idx + 1).toString)
         fieldMetadataUpdates.put(
           java.lang.Integer.valueOf(field.getId),
@@ -121,8 +136,9 @@ case class SetUnenforcedPrimaryKeyExec(
 
   private def hasPrimaryKeyMetadata(
       field: org.lance.schema.LanceField): Boolean = {
-    "true".equalsIgnoreCase(
-      field.getMetadata.get("lance-schema:unenforced-primary-key"))
+    val metadata = field.getMetadata
+    metadata != null && "true".equalsIgnoreCase(
+      metadata.get(SetUnenforcedPrimaryKeyExec.METADATA_KEY_PK))
   }
 
   private def openDataset(readOptions: LanceSparkReadOptions): Dataset = {

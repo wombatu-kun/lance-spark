@@ -202,6 +202,7 @@ docker-test:
 		$(if $(LANCEDB_API_KEY),-e LANCEDB_API_KEY=$(LANCEDB_API_KEY)) \
 		$(if $(LANCEDB_HOST_OVERRIDE),-e LANCEDB_HOST_OVERRIDE=$(LANCEDB_HOST_OVERRIDE)) \
 		$(if $(LANCEDB_REGION),-e LANCEDB_REGION=$(LANCEDB_REGION)) \
+		$(if $(TEST_BACKENDS),-e TEST_BACKENDS=$(TEST_BACKENDS)) \
 		lance-spark-test:$(SPARK_VERSION)_$(SCALA_VERSION) \
 		"pytest /home/lance/tests/ -v --timeout=180"
 

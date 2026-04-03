@@ -172,9 +172,10 @@ LANCEDB_API_KEY = os.environ.get("LANCEDB_API_KEY")
 LANCEDB_HOST_OVERRIDE = os.environ.get("LANCEDB_HOST_OVERRIDE")
 LANCEDB_REGION = os.environ.get("LANCEDB_REGION", "us-east-1")
 
-_backends = ["local", "azurite", "minio"]
+_all_backends = ["local", "azurite", "minio"]
 if LANCEDB_DB and LANCEDB_API_KEY:
-    _backends.append("lancedb")
+    _all_backends.append("lancedb")
+_backends = os.environ.get("TEST_BACKENDS", ",".join(_all_backends)).split(",")
 
 
 @pytest.fixture(scope="module", params=_backends)

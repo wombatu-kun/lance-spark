@@ -615,7 +615,8 @@ public abstract class BaseLanceNamespaceSparkCatalog
         namespaceImpl,
         namespaceProperties,
         managedVersioning,
-        fileFormatVersion);
+        fileFormatVersion,
+        Collections.emptyMap());
   }
 
   /**
@@ -649,7 +650,15 @@ public abstract class BaseLanceNamespaceSparkCatalog
     } catch (IllegalArgumentException e) {
       throw new TableAlreadyExistsException(ident);
     }
-    return createDataset(readOptions, processedSchema, null, null, null, false, fileFormatVersion);
+    return createDataset(
+        readOptions,
+        processedSchema,
+        null,
+        null,
+        null,
+        false,
+        fileFormatVersion,
+        Collections.emptyMap());
   }
 
   @Override
@@ -809,7 +818,8 @@ public abstract class BaseLanceNamespaceSparkCatalog
         namespaceProperties,
         managedVersioning,
         stagedCommit,
-        fileFormatVersion);
+        fileFormatVersion,
+        Collections.emptyMap());
   }
 
   /** Stage create a table at a direct path. */
@@ -828,7 +838,15 @@ public abstract class BaseLanceNamespaceSparkCatalog
             arrowSchema, datasetUri, catalogConfig.getStorageOptions(), null, null, false);
     String fileFormatVersion = catalogConfig.getFileFormatVersion(properties);
     return createStagedDataset(
-        readOptions, processedSchema, null, null, null, false, stagedCommit, fileFormatVersion);
+        readOptions,
+        processedSchema,
+        null,
+        null,
+        null,
+        false,
+        stagedCommit,
+        fileFormatVersion,
+        Collections.emptyMap());
   }
 
   @Override
@@ -867,7 +885,8 @@ public abstract class BaseLanceNamespaceSparkCatalog
         namespaceProperties,
         managedVersioning,
         stagedCommit,
-        fileFormatVersion);
+        fileFormatVersion,
+        Collections.emptyMap());
   }
 
   /** Stage replace a table at a direct path. */
@@ -898,7 +917,15 @@ public abstract class BaseLanceNamespaceSparkCatalog
       fileFormatVersion = ds.getLanceFileFormatVersion();
     }
     return createStagedDataset(
-        readOptions, processedSchema, null, null, null, false, stagedCommit, fileFormatVersion);
+        readOptions,
+        processedSchema,
+        null,
+        null,
+        null,
+        false,
+        stagedCommit,
+        fileFormatVersion,
+        Collections.emptyMap());
   }
 
   @Override
@@ -978,7 +1005,8 @@ public abstract class BaseLanceNamespaceSparkCatalog
         namespaceProperties,
         managedVersioning,
         stagedCommit,
-        fileFormatVersion);
+        fileFormatVersion,
+        Collections.emptyMap());
   }
 
   /** Stage create or replace a table at a direct path. */
@@ -1011,7 +1039,15 @@ public abstract class BaseLanceNamespaceSparkCatalog
               arrowSchema, datasetUri, catalogConfig.getStorageOptions(), null, null, false);
     }
     return createStagedDataset(
-        readOptions, processedSchema, null, null, null, false, stagedCommit, fileFormatVersion);
+        readOptions,
+        processedSchema,
+        null,
+        null,
+        null,
+        false,
+        stagedCommit,
+        fileFormatVersion,
+        Collections.emptyMap());
   }
 
   /**
@@ -1237,12 +1273,14 @@ public abstract class BaseLanceNamespaceSparkCatalog
       readOptions = resolved.readOptions;
     }
 
-    // Read schema and file format version from the dataset
+    // Read schema, file format version, and config from the dataset
     String fileFormatVersion;
     StructType schema;
+    Map<String, String> tableProperties;
     try (Dataset dataset = openDataset(readOptions)) {
       schema = LanceArrowUtils.fromArrowSchema(dataset.getSchema());
       fileFormatVersion = dataset.getLanceFileFormatVersion();
+      tableProperties = dataset.getConfig();
     }
 
     // Create read options with namespace support
@@ -1254,7 +1292,8 @@ public abstract class BaseLanceNamespaceSparkCatalog
         namespaceImpl,
         namespaceProperties,
         managedVersioning,
-        fileFormatVersion);
+        fileFormatVersion,
+        tableProperties);
   }
 
   /**
@@ -1335,17 +1374,20 @@ public abstract class BaseLanceNamespaceSparkCatalog
         createReadOptions(
             datasetUri, catalogConfig, versionId, Optional.empty(), Optional.empty(), name);
 
-    // Read schema and file format version from the dataset
+    // Read schema, file format version, and config from the dataset
     String fileFormatVersion;
     StructType schema;
+    Map<String, String> tableProperties;
     try (Dataset dataset = openDataset(readOptions)) {
       schema = LanceArrowUtils.fromArrowSchema(dataset.getSchema());
       fileFormatVersion = dataset.getLanceFileFormatVersion();
+      tableProperties = dataset.getConfig();
     } catch (IllegalArgumentException e) {
       throw new NoSuchTableException(ident);
     }
 
-    return createDataset(readOptions, schema, null, null, null, false, fileFormatVersion);
+    return createDataset(
+        readOptions, schema, null, null, null, false, fileFormatVersion, tableProperties);
   }
 
   public abstract LanceDataset createDataset(
@@ -1355,7 +1397,8 @@ public abstract class BaseLanceNamespaceSparkCatalog
       String namespaceImpl,
       Map<String, String> namespaceProperties,
       boolean managedVersioning,
-      String fileFormatVersion);
+      String fileFormatVersion,
+      Map<String, String> tableProperties);
 
   public abstract LanceDataset createStagedDataset(
       LanceSparkReadOptions readOptions,
@@ -1365,5 +1408,6 @@ public abstract class BaseLanceNamespaceSparkCatalog
       Map<String, String> namespaceProperties,
       boolean managedVersioning,
       StagedCommit stagedCommit,
-      String fileFormatVersion);
+      String fileFormatVersion,
+      Map<String, String> tableProperties);
 }

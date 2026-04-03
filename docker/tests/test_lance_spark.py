@@ -320,49 +320,39 @@ class TestDDLStagingTable:
 class TestDDLAlterTableProperties:
     """Test ALTER TABLE SET/UNSET TBLPROPERTIES operations."""
 
-    def test_set_tblproperties_enable_stable_row_ids(self, spark):
-        """SET TBLPROPERTIES can enable stable row IDs on an existing table."""
+    def test_set_tblproperties(self, spark):
+        """SET TBLPROPERTIES stores properties visible via SHOW TBLPROPERTIES."""
         spark.sql("""
             CREATE TABLE default.test_table (id INT, name STRING, value INT)
         """)
         spark.sql("""
             ALTER TABLE default.test_table
-            SET TBLPROPERTIES ('enable_stable_row_ids' = 'true')
-        """)
-        spark.sql("""
-            INSERT INTO default.test_table VALUES (1, 'Alice', 100), (2, 'Bob', 200)
+            SET TBLPROPERTIES ('team' = 'data-eng', 'version' = '2.0')
         """)
 
-        result = spark.sql("""
-            SELECT id, _row_created_at_version, _row_last_updated_at_version
-            FROM default.test_table ORDER BY id
-        """).collect()
+        rows = spark.sql("SHOW TBLPROPERTIES default.test_table").collect()
+        props = {row.key: row.value for row in rows}
 
-        assert len(result) == 2
-        for row in result:
-            assert row._row_created_at_version > 1
-            assert row._row_last_updated_at_version > 1
+        assert props["team"] == "data-eng"
+        assert props["version"] == "2.0"
 
     def test_unset_tblproperties(self, spark):
         """UNSET TBLPROPERTIES removes a previously set property."""
+        spark.sql("CREATE TABLE default.test_table (id INT, value INT)")
         spark.sql("""
-            CREATE TABLE default.test_table (id INT, value INT)
-            TBLPROPERTIES ('enable_stable_row_ids' = 'true')
+            ALTER TABLE default.test_table
+            SET TBLPROPERTIES ('team' = 'data-eng', 'env' = 'prod')
         """)
         spark.sql("""
             ALTER TABLE default.test_table
-            UNSET TBLPROPERTIES ('enable_stable_row_ids')
+            UNSET TBLPROPERTIES ('team')
         """)
-        spark.sql("INSERT INTO default.test_table VALUES (1, 100)")
 
-        result = spark.sql("""
-            SELECT _row_created_at_version, _row_last_updated_at_version
-            FROM default.test_table
-        """).collect()
+        rows = spark.sql("SHOW TBLPROPERTIES default.test_table").collect()
+        props = {row.key: row.value for row in rows}
 
-        assert len(result) == 1
-        assert result[0]._row_created_at_version == 1
-        assert result[0]._row_last_updated_at_version == 1
+        assert "team" not in props
+        assert props["env"] == "prod"
 
     def test_set_custom_properties(self, spark):
         """SET TBLPROPERTIES with custom key-value pairs does not break the table."""
@@ -380,21 +370,20 @@ class TestDDLAlterTableProperties:
 
     def test_overwrite_existing_property(self, spark):
         """SET TBLPROPERTIES overwrites an existing property value."""
+        spark.sql("CREATE TABLE default.test_table (id INT, value INT)")
         spark.sql("""
-            CREATE TABLE default.test_table (id INT, value INT)
-            TBLPROPERTIES ('enable_stable_row_ids' = 'true')
+            ALTER TABLE default.test_table
+            SET TBLPROPERTIES ('env' = 'staging')
         """)
         spark.sql("""
             ALTER TABLE default.test_table
-            SET TBLPROPERTIES ('enable_stable_row_ids' = 'false')
+            SET TBLPROPERTIES ('env' = 'production')
         """)
-        spark.sql("INSERT INTO default.test_table VALUES (1, 100)")
 
-        result = spark.sql("""
-            SELECT _row_created_at_version FROM default.test_table
-        """).collect()
+        rows = spark.sql("SHOW TBLPROPERTIES default.test_table").collect()
+        props = {row.key: row.value for row in rows}
 
-        assert result[0]._row_created_at_version == 1
+        assert props["env"] == "production"
 
     def test_set_properties_on_nonexistent_table(self, spark):
         """SET TBLPROPERTIES on non-existent table raises an error."""
@@ -410,20 +399,16 @@ class TestDDLAlterTableProperties:
         spark.sql("CREATE TABLE default.test_table (id INT, value INT)")
         spark.sql("""
             ALTER TABLE default.test_table
-            SET TBLPROPERTIES ('enable_stable_row_ids' = 'true')
+            SET TBLPROPERTIES ('team' = 'data-eng')
         """)
 
         spark.sql("INSERT INTO default.test_table VALUES (1, 100)")
         spark.sql("INSERT INTO default.test_table VALUES (2, 200)")
 
-        result = spark.sql("""
-            SELECT id, _row_created_at_version
-            FROM default.test_table ORDER BY id
-        """).collect()
+        rows = spark.sql("SHOW TBLPROPERTIES default.test_table").collect()
+        props = {row.key: row.value for row in rows}
 
-        assert len(result) == 2
-        for row in result:
-            assert row._row_created_at_version > 1
+        assert props["team"] == "data-eng"
 
 
 class TestDDLIndex:

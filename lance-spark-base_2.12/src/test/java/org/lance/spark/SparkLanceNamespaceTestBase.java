@@ -840,6 +840,88 @@ public abstract class SparkLanceNamespaceTestBase {
     assertTrue(ex.getMessage().contains("Only SET/UNSET TBLPROPERTIES is supported"));
   }
 
+
+  @Test
+  public void testShowTablePropertiesEmpty() throws Exception {
+    String tableName = generateTableName("show_props_empty");
+    String fullName = catalogName + ".default." + tableName;
+
+    spark.sql("CREATE TABLE " + fullName + " (id BIGINT NOT NULL, name STRING)");
+
+    List<Row> rows = spark.sql("SHOW TBLPROPERTIES " + fullName).collectAsList();
+    // A fresh table has no user-set properties, but Lance may add internal
+    // config keys (e.g. lance.auto_cleanup.*).  Verify no user keys are present.
+    for (Row row : rows) {
+      assertTrue(
+          row.getString(0).startsWith("lance."),
+          "Unexpected non-internal property on fresh table: " + row.getString(0));
+    }
+  }
+
+  @Test
+  public void testShowTableProperties() throws Exception {
+    String tableName = generateTableName("show_props");
+    String fullName = catalogName + ".default." + tableName;
+
+    spark.sql("CREATE TABLE " + fullName + " (id BIGINT NOT NULL, name STRING)");
+    spark.sql(
+        "ALTER TABLE " + fullName + " SET TBLPROPERTIES ('team' = 'data-eng', 'version' = '2.0')");
+
+    List<Row> rows = spark.sql("SHOW TBLPROPERTIES " + fullName).collectAsList();
+    Map<String, String> props = new HashMap<>();
+    for (Row row : rows) {
+      props.put(row.getString(0), row.getString(1));
+    }
+    assertEquals("data-eng", props.get("team"));
+    assertEquals("2.0", props.get("version"));
+  }
+
+  @Test
+  public void testShowTablePropertiesByKey() throws Exception {
+    String tableName = generateTableName("show_props_key");
+    String fullName = catalogName + ".default." + tableName;
+
+    spark.sql("CREATE TABLE " + fullName + " (id BIGINT NOT NULL, name STRING)");
+    spark.sql(
+        "ALTER TABLE " + fullName + " SET TBLPROPERTIES ('team' = 'data-eng', 'version' = '2.0')");
+
+    List<Row> rows = spark.sql("SHOW TBLPROPERTIES " + fullName + " ('team')").collectAsList();
+    assertEquals(1, rows.size());
+    assertEquals("team", rows.get(0).getString(0));
+    assertEquals("data-eng", rows.get(0).getString(1));
+  }
+
+  @Test
+  public void testShowTablePropertiesByNonExistentKey() throws Exception {
+    String tableName = generateTableName("show_props_missing_key");
+    String fullName = catalogName + ".default." + tableName;
+
+    spark.sql("CREATE TABLE " + fullName + " (id BIGINT NOT NULL, name STRING)");
+    spark.sql("ALTER TABLE " + fullName + " SET TBLPROPERTIES ('team' = 'data-eng')");
+
+    List<Row> rows =
+        spark.sql("SHOW TBLPROPERTIES " + fullName + " ('nonexistent')").collectAsList();
+    assertEquals(1, rows.size());
+    // Spark returns the key with a message like "does not have property"
+    String value = rows.get(0).getString(1);
+    assertTrue(
+        value.contains("does not have property"), "Expected informational message, got: " + value);
+  }
+
+  @Test
+  public void testShowTablePropertiesOnNonExistentTableFails() {
+    String tableName = generateTableName("show_props_nonexistent");
+    String fullName = catalogName + ".default." + tableName;
+
+    AnalysisException ex =
+        assertThrows(
+            AnalysisException.class,
+            () -> {
+              spark.sql("SHOW TBLPROPERTIES " + fullName);
+            });
+    assertEquals("TABLE_OR_VIEW_NOT_FOUND", ex.getErrorClass());
+  }
+
   private boolean checkDataset(int expectedSize, String tableName) {
     Dataset<Row> actual = spark.sql("SELECT * FROM " + tableName);
     List<Row> res = actual.collectAsList();

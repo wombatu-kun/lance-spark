@@ -181,6 +181,56 @@ public class Float16UtilsTest {
   }
 
   @Test
+  public void testSignalingNaNDoesNotBecomeInfinity() {
+    // Signaling NaN with payload only in lowest mantissa bit (0x7F800001).
+    // Before the fix, mantissa >>> 13 == 0, producing Infinity instead of NaN.
+    float signalingNaN = Float.intBitsToFloat(0x7F800001);
+    assertTrue(Float.isNaN(signalingNaN), "Input should be NaN");
+
+    short halfBits = Float16Utils.floatToHalf(signalingNaN);
+    float result = Float16Utils.halfToFloat(halfBits);
+
+    assertTrue(Float.isNaN(result), "Signaling NaN must remain NaN, not become Infinity");
+    assertFalse(Float.isInfinite(result), "Signaling NaN must not become Infinity");
+
+    // Verify the raw half bits have non-zero mantissa (NaN, not Inf)
+    int h = halfBits & 0xFFFF;
+    int halfExponent = (h >>> 10) & 0x1F;
+    int halfMantissaBits = h & 0x3FF;
+    assertEquals(0x1F, halfExponent, "Exponent should be all 1s");
+    assertTrue(halfMantissaBits != 0, "Half mantissa must be non-zero for NaN");
+  }
+
+  @Test
+  public void testNegativeSignalingNaN() {
+    // Negative signaling NaN: 0xFF800001
+    float negSignalingNaN = Float.intBitsToFloat(0xFF800001);
+    assertTrue(Float.isNaN(negSignalingNaN));
+
+    short halfBits = Float16Utils.floatToHalf(negSignalingNaN);
+    float result = Float16Utils.halfToFloat(halfBits);
+
+    assertTrue(Float.isNaN(result), "Negative signaling NaN must remain NaN");
+    assertFalse(Float.isInfinite(result), "Negative signaling NaN must not become Infinity");
+  }
+
+  @Test
+  public void testAllLowBitNaNPayloadsPreserved() {
+    // Test several NaN payloads that fit entirely in the lower 13 bits
+    for (int payload = 1; payload <= 0x1FFF; payload <<= 1) {
+      int nanBits = 0x7F800000 | payload;
+      float nan = Float.intBitsToFloat(nanBits);
+      assertTrue(Float.isNaN(nan));
+
+      short halfBits = Float16Utils.floatToHalf(nan);
+      float result = Float16Utils.halfToFloat(halfBits);
+      assertTrue(
+          Float.isNaN(result),
+          "NaN with low-bit payload 0x" + Integer.toHexString(payload) + " must stay NaN");
+    }
+  }
+
+  @Test
   public void testHasFloat16Metadata() {
     Metadata withFlag = new MetadataBuilder().putString("arrow.float16", "true").build();
     assertTrue(Float16Utils.hasFloat16Metadata(withFlag));

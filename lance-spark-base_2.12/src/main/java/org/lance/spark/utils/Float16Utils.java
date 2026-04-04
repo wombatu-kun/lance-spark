@@ -190,8 +190,15 @@ public class Float16Utils {
         // Infinity
         return (short) (halfSign | 0x7C00);
       }
-      // NaN - preserve some payload bits
-      return (short) (halfSign | 0x7C00 | (mantissa >>> 13));
+      // NaN - preserve some payload bits.
+      // When the payload is entirely in the lower 13 bits (e.g., signaling NaN 0x7F800001),
+      // mantissa >>> 13 yields 0, which would produce Infinity instead of NaN.
+      // Ensure at least one mantissa bit is set to keep it a NaN.
+      int halfMantissa = mantissa >>> 13;
+      if (halfMantissa == 0) {
+        halfMantissa = 1;
+      }
+      return (short) (halfSign | 0x7C00 | halfMantissa);
     }
 
     // Re-bias exponent from float (bias=127) to half (bias=15)

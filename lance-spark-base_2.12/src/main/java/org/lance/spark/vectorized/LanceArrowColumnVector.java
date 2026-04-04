@@ -78,7 +78,7 @@ public class LanceArrowColumnVector extends ColumnVector {
       largeVarCharAccessor = new LargeVarCharAccessor((LargeVarCharVector) vector);
     } else if (vector instanceof DateMilliVector) {
       dateMilliAccessor = new DateMilliAccessor((DateMilliVector) vector);
-    } else if (vector.getClass().getSimpleName().equals("Float2Vector")) {
+    } else if (vector.getClass().getName().equals("org.apache.arrow.vector.Float2Vector")) {
       // Float2Vector is only available in Arrow 18+ (Spark 4.0+).
       // Use class name check to avoid compile-time dependency.
       float2Accessor = new Float2Accessor(vector);

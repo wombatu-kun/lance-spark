@@ -79,7 +79,8 @@ object LanceArrowWriter {
       case (IntegerType, vector: IntVector) => new IntegerWriter(vector)
       case (LongType, vector: BigIntVector) => new LongWriter(vector)
       case (LongType, vector: UInt8Vector) => new UnsignedLongWriter(vector)
-      case (FloatType, vector) if vector.getClass.getSimpleName == "Float2Vector" =>
+      case (FloatType, vector)
+          if vector.getClass.getName == "org.apache.arrow.vector.Float2Vector" =>
         new Float2Writer(vector)
       case (FloatType, vector: Float4Vector) => new FloatWriter(vector)
       case (DoubleType, vector: Float8Vector) => new DoubleWriter(vector)
@@ -244,17 +245,22 @@ private[arrow] class FloatWriter(val valueVector: Float4Vector) extends LanceArr
 
 /**
  * Writer for float16 (half-precision) vectors. Narrows float32 from Spark to float16 in Arrow.
- * Uses ValueVector base class since Float2Vector is only available in Arrow 18+ (Spark 4.0+).
+ * Uses cached reflection to call Float2Vector.setSafe(int, short) since Float2Vector
+ * is only available in Arrow 18+ (Spark 4.0+) and cannot be referenced at compile time.
  */
 private[arrow] class Float2Writer(val valueVector: ValueVector) extends LanceArrowFieldWriter {
+  // Cache the setSafe(int, short) method once to avoid repeated reflection lookups.
+  private val setSafeMethod: java.lang.reflect.Method =
+    valueVector.getClass.getMethod("setSafe", classOf[Int], classOf[Short])
+
   override def setNull(): Unit = {}
   override def setValue(input: SpecializedGetters, ordinal: Int): Unit = {
     val floatValue = input.getFloat(ordinal)
     val halfBits = Float16Utils.floatToHalf(floatValue)
-    // Float2Vector is BaseFixedWidthVector with TYPE_WIDTH=2.
-    // Write 2 bytes at offset count * 2 in the data buffer.
-    valueVector.getDataBuffer.setShort(count.toLong * 2, halfBits)
-    BitVectorHelper.setBit(valueVector.getValidityBuffer, count)
+    setSafeMethod.invoke(
+      valueVector,
+      count: java.lang.Integer,
+      halfBits: java.lang.Short)
   }
 }
 

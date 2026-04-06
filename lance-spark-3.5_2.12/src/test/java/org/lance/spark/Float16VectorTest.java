@@ -11,6 +11,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.spark.sql.catalyst.plans.logical
+package org.lance.spark;
 
-case class LanceNamedArgument(name: String, value: Any)
+public class Float16VectorTest extends BaseFloat16VectorTest {}

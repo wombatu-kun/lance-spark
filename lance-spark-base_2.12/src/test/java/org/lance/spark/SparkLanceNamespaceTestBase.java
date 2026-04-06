@@ -840,7 +840,6 @@ public abstract class SparkLanceNamespaceTestBase {
     assertTrue(ex.getMessage().contains("Only SET/UNSET TBLPROPERTIES is supported"));
   }
 
-
   @Test
   public void testShowTablePropertiesEmpty() throws Exception {
     String tableName = generateTableName("show_props_empty");

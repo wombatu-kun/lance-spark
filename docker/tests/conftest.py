@@ -17,6 +17,11 @@ import urllib.error
 import pytest
 from pyspark.sql import SparkSession
 
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "requires_rest: test only runs on REST-based backends")
+
+
 # ---------------------------------------------------------------------------
 # Azurite (Azure Blob Storage emulator) configuration
 # ---------------------------------------------------------------------------
@@ -256,7 +261,7 @@ def spark(request):
     session.sql(f"SET spark.sql.defaultCatalog={CATALOG}")
     # Create default namespace for multi-level namespace mode
     session.sql("CREATE NAMESPACE IF NOT EXISTS default")
-    # Store backend name so tests can branch on namespace implementation
+    # Store backend name for marker-based test skipping
     session._lance_backend = backend
     yield session
     session.stop()
@@ -280,6 +285,14 @@ def test_table(request, spark):
 
     # Cleanup after test
     spark.sql(f"DROP TABLE IF EXISTS {table_name} PURGE")
+
+
+@pytest.fixture(autouse=True)
+def _skip_by_backend(request, spark):
+    """Auto-skip tests marked ``requires_rest`` on non-REST backends."""
+    if request.node.get_closest_marker("requires_rest"):
+        if getattr(spark, "_lance_backend", None) != "lancedb":
+            pytest.skip("requires REST-based backend")
 
 
 @pytest.fixture(autouse=True)

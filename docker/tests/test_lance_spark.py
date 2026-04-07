@@ -121,19 +121,16 @@ class TestDDLTable:
         assert "test_table" not in table_names
 
 
+@pytest.mark.requires_rest
 class TestDDLRenameTable:
     """Test ALTER TABLE ... RENAME TO operations.
 
-    DirectoryNamespace (``impl=dir``) does not support rename — tests on local,
-    Azurite, and MinIO backends verify error behaviour.  On LanceDB Cloud
-    (``impl=rest``), rename is supported and the happy-path is exercised.
+    Rename is only supported on REST-based backends (e.g. LanceDB Cloud).
+    Tests are auto-skipped on directory-based backends via the ``requires_rest`` marker.
     """
 
-    def _is_dir_backend(self, spark):
-        return getattr(spark, "_lance_backend", None) != "lancedb"
-
     def test_rename_table(self, spark):
-        """Rename succeeds on REST impl, fails on dir impl."""
+        """Rename succeeds and data is preserved under the new name."""
         spark.sql("""
             CREATE TABLE default.test_table (
                 id INT,
@@ -142,28 +139,18 @@ class TestDDLRenameTable:
         """)
         spark.sql("INSERT INTO default.test_table VALUES (1, 'Alice'), (2, 'Bob')")
 
-        if self._is_dir_backend(spark):
-            with pytest.raises(Exception, match="Not supported: renameTable"):
-                spark.sql(
-                    "ALTER TABLE default.test_table RENAME TO default.test_table_renamed"
-                )
-            # Original table still readable after failure
-            result = spark.table("default.test_table").collect()
-            assert len(result) == 2
-        else:
-            spark.sql(
-                "ALTER TABLE default.test_table RENAME TO default.test_table_renamed"
-            )
-            # Data preserved under new name
-            result = spark.table("default.test_table_renamed").orderBy("id").collect()
-            assert len(result) == 2
-            assert result[0].id == 1
-            assert result[0].name == "Alice"
-            assert result[1].id == 2
-            assert result[1].name == "Bob"
-            # Old name no longer accessible
-            with pytest.raises(Exception, match="TABLE_OR_VIEW_NOT_FOUND"):
-                spark.sql("SELECT * FROM default.test_table")
+        spark.sql(
+            "ALTER TABLE default.test_table RENAME TO default.test_table_renamed"
+        )
+        result = spark.table("default.test_table_renamed").orderBy("id").collect()
+        assert len(result) == 2
+        assert result[0].id == 1
+        assert result[0].name == "Alice"
+        assert result[1].id == 2
+        assert result[1].name == "Bob"
+        # Old name no longer accessible
+        with pytest.raises(Exception, match="TABLE_OR_VIEW_NOT_FOUND"):
+            spark.sql("SELECT * FROM default.test_table")
 
     def test_rename_nonexistent_table_fails(self, spark):
         """Renaming a non-existent table should fail with AnalysisException."""
@@ -177,22 +164,13 @@ class TestDDLRenameTable:
         spark.sql("CREATE TABLE default.test_table (id INT)")
         spark.sql("CREATE TABLE default.test_table_renamed (id INT)")
 
-        if self._is_dir_backend(spark):
-            with pytest.raises(Exception, match="Not supported: renameTable"):
-                spark.sql(
-                    "ALTER TABLE default.test_table RENAME TO default.test_table_renamed"
-                )
-        else:
-            with pytest.raises(Exception, match="TABLE_ALREADY_EXISTS"):
-                spark.sql(
-                    "ALTER TABLE default.test_table RENAME TO default.test_table_renamed"
-                )
+        with pytest.raises(Exception, match="TABLE_ALREADY_EXISTS"):
+            spark.sql(
+                "ALTER TABLE default.test_table RENAME TO default.test_table_renamed"
+            )
 
     def test_rename_preserves_schema_and_data(self, spark):
         """After rename, schema and all data rows are intact."""
-        if self._is_dir_backend(spark):
-            pytest.skip("rename not supported on dir impl")
-
         spark.sql("""
             CREATE TABLE default.test_table (
                 id INT,

@@ -17,6 +17,7 @@ import org.lance.Dataset;
 import org.lance.WriteParams;
 import org.lance.spark.LanceSparkWriteOptions;
 import org.lance.spark.TestUtils;
+import org.lance.spark.streaming.LanceStreamingWrite;
 
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
@@ -86,10 +87,38 @@ public class SparkWriteTest {
   }
 
   @Test
-  public void testToStreamingThrowsUnsupportedOperationException(TestInfo testInfo) {
+  public void testToStreamingWithoutQueryIdThrowsIllegalArgument(TestInfo testInfo) {
+    // Without a streamingQueryId, toStreaming() must fail fast with a clear error. This is the
+    // post-streaming-support contract — previously this test asserted UnsupportedOperationException
+    // from a stub, but once LanceStreamingWrite was implemented it now validates that the user
+    // has supplied the required idempotency key.
     String datasetUri = createDataset(testInfo.getTestMethod().get().getName());
     Write write = createBuilder(datasetUri).build();
-    assertThrows(UnsupportedOperationException.class, write::toStreaming);
+    IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, write::toStreaming);
+    assertTrue(
+        ex.getMessage().contains(LanceSparkWriteOptions.CONFIG_STREAMING_QUERY_ID),
+        "Error should name the required option. Got: " + ex.getMessage());
+  }
+
+  @Test
+  public void testToStreamingWithQueryIdReturnsLanceStreamingWrite(TestInfo testInfo) {
+    String datasetUri = createDataset(testInfo.getTestMethod().get().getName());
+    LanceSparkWriteOptions writeOptions =
+        LanceSparkWriteOptions.builder()
+            .datasetUri(datasetUri)
+            .streamingQueryId("test-query-id")
+            .build();
+    SparkWrite.SparkWriteBuilder builder =
+        new SparkWrite.SparkWriteBuilder(
+            SPARK_SCHEMA,
+            writeOptions,
+            Collections.emptyMap(),
+            null,
+            Collections.emptyMap(),
+            Arrays.asList("default", "test_table"),
+            false);
+    Write write = builder.build();
+    assertInstanceOf(LanceStreamingWrite.class, write.toStreaming());
   }
 
   @Test

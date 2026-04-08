@@ -17,6 +17,7 @@ Specifically, you can use the Apache Spark Connector for Lance to:
 * **Read & Write Lance Datasets**: Seamlessly read and write datasets stored in the Lance format using Spark.
 * **Distributed, Parallel Scans**: Leverage Spark's distributed computing capabilities to perform parallel scans on Lance datasets.
 * **Column and Filter Pushdown**: Optimize query performance by pushing down column selections and filters to the data source.
+* **Structured Streaming Sinks**: Write Spark Structured Streaming queries to Lance tables with exactly-once guarantees via a two-transaction commit protocol. See [Streaming Writes](operations/streaming/streaming-writes.md).
 
 ## Quick Start
 

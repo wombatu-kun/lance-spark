@@ -130,38 +130,97 @@ public class LanceBatchWrite implements BatchWrite {
         stagedCommit.setEnableStableRowIds(enableStableRowIds);
       }
     } else {
-      // For non-staged tables, commit immediately
-      long version =
-          Objects.requireNonNull(
-              writeOptions.getVersion(),
-              "version must be set (resolved in LanceBatchWrite constructor)");
+      // For non-staged tables, commit immediately via the shared doCommit helper
+      // (reused by the streaming sink for exactly-once commits). The constructor pinned
+      // the dataset version on writeOptions, so we re-open at that pinned version here —
+      // this matches main's "don't hold Dataset across phases" contract while still
+      // letting LanceStreamingWrite reuse the same commit path.
+      Objects.requireNonNull(
+          writeOptions.getVersion(),
+          "version must be set (resolved in LanceBatchWrite constructor)");
       try (Dataset ds = Utils.openDatasetBuilder(writeOptions).build()) {
-        Operation operation;
-        if (isOverwrite) {
-          operation = Overwrite.builder().fragments(fragments).schema(arrowSchema).build();
-        } else {
-          operation = Append.builder().fragments(fragments).build();
-        }
-        CommitBuilder commitBuilder =
-            new CommitBuilder(ds).writeParams(writeOptions.getStorageOptions());
-        // When enableStableRowIds is null (user didn't pass the option),
-        // lance-core auto-inherits the flag from the existing manifest.
-        // Appending to a table with stable row IDs works without
-        // re-specifying the option.
-        if (enableStableRowIds != null) {
-          commitBuilder.useStableRowIds(enableStableRowIds);
-        }
-        if (managedVersioning) {
-          LanceNamespace namespace =
-              LanceRuntime.getOrCreateNamespace(namespaceImpl, namespaceProperties);
-          commitBuilder.namespaceClient(namespace).tableId(tableId);
-        }
-        try (Transaction txn =
-                new Transaction.Builder().readVersion(version).operation(operation).build();
-            Dataset committed = commitBuilder.execute(txn)) {
-          // auto-close txn and committed dataset
-        }
+        doCommit(
+            ds,
+            fragments,
+            arrowSchema,
+            isOverwrite,
+            writeOptions,
+            namespaceImpl,
+            namespaceProperties,
+            managedVersioning,
+            tableId,
+            null /* no transaction properties for batch writes */);
       }
+    }
+  }
+
+  /**
+   * Core commit path shared between batch and streaming writes: builds an {@link Append} or {@link
+   * Overwrite} operation from the supplied fragments, wraps it in a {@link Transaction} (optionally
+   * carrying {@code transactionProperties} for streaming exactly-once tracking), and executes the
+   * commit via {@link CommitBuilder}.
+   *
+   * <p>The caller is responsible for opening and closing the input {@link Dataset}. This method
+   * only closes the transient objects it creates ({@link Transaction} and the post-commit {@link
+   * Dataset} returned by {@link CommitBuilder#execute}).
+   *
+   * @param dataset existing dataset to commit to
+   * @param fragments fragments produced by worker tasks
+   * @param arrowSchema Arrow schema, used only for {@link Overwrite} operations
+   * @param isOverwrite {@code true} to build an {@link Overwrite} op, {@code false} for {@link
+   *     Append}
+   * @param writeOptions write options (storage options, stable row IDs, etc.)
+   * @param namespaceImpl namespace implementation class name, may be {@code null}
+   * @param namespaceProperties namespace connection properties, may be {@code null}
+   * @param managedVersioning whether the namespace manages versioning
+   * @param tableId table identifier for namespace-managed versioning
+   * @param transactionProperties optional transaction properties to attach; used by the streaming
+   *     sink to persist {@code streaming.queryId} and {@code streaming.epochId} for idempotent
+   *     replay. May be {@code null} or empty to commit without transaction properties.
+   */
+  public static void doCommit(
+      Dataset dataset,
+      List<FragmentMetadata> fragments,
+      Schema arrowSchema,
+      boolean isOverwrite,
+      LanceSparkWriteOptions writeOptions,
+      String namespaceImpl,
+      Map<String, String> namespaceProperties,
+      boolean managedVersioning,
+      List<String> tableId,
+      Map<String, String> transactionProperties) {
+    Operation operation;
+    if (isOverwrite) {
+      operation = Overwrite.builder().fragments(fragments).schema(arrowSchema).build();
+    } else {
+      operation = Append.builder().fragments(fragments).build();
+    }
+
+    CommitBuilder commitBuilder =
+        new CommitBuilder(dataset).writeParams(writeOptions.getStorageOptions());
+
+    // When enableStableRowIds is null (user didn't pass the option), lance-core auto-inherits
+    // the flag from the existing manifest. Appending to a table with stable row IDs works
+    // without re-specifying the option.
+    Boolean enableStableRowIds = writeOptions.getEnableStableRowIds();
+    if (enableStableRowIds != null) {
+      commitBuilder.useStableRowIds(enableStableRowIds);
+    }
+    if (managedVersioning) {
+      LanceNamespace namespace =
+          LanceRuntime.getOrCreateNamespace(namespaceImpl, namespaceProperties);
+      commitBuilder.namespaceClient(namespace).tableId(tableId);
+    }
+
+    Transaction.Builder txnBuilder =
+        new Transaction.Builder().readVersion(dataset.version()).operation(operation);
+    if (transactionProperties != null && !transactionProperties.isEmpty()) {
+      txnBuilder.transactionProperties(transactionProperties);
+    }
+
+    try (Transaction txn = txnBuilder.build();
+        Dataset committed = commitBuilder.execute(txn)) {
+      // auto-close txn and committed dataset
     }
   }
 
@@ -179,11 +238,11 @@ public class LanceBatchWrite implements BatchWrite {
   public static class TaskCommit implements WriterCommitMessage {
     private final List<FragmentMetadata> fragments;
 
-    TaskCommit(List<FragmentMetadata> fragments) {
+    public TaskCommit(List<FragmentMetadata> fragments) {
       this.fragments = fragments;
     }
 
-    List<FragmentMetadata> getFragments() {
+    public List<FragmentMetadata> getFragments() {
       return fragments;
     }
   }

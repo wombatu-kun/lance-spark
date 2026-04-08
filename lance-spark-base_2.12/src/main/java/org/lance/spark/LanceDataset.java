@@ -55,7 +55,10 @@ public class LanceDataset
 
   private static final Set<TableCapability> CAPABILITIES =
       ImmutableSet.of(
-          TableCapability.BATCH_READ, TableCapability.BATCH_WRITE, TableCapability.TRUNCATE);
+          TableCapability.BATCH_READ,
+          TableCapability.BATCH_WRITE,
+          TableCapability.TRUNCATE,
+          TableCapability.STREAMING_WRITE);
 
   public static final MetadataColumn FRAGMENT_ID_COLUMN =
       new MetadataColumn() {

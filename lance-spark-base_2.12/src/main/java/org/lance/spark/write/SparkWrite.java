@@ -15,12 +15,15 @@ package org.lance.spark.write;
 
 import org.lance.WriteParams;
 import org.lance.spark.LanceSparkWriteOptions;
+import org.lance.spark.streaming.LanceStreamingExceptions;
+import org.lance.spark.streaming.LanceStreamingWrite;
 
 import org.apache.spark.sql.connector.write.BatchWrite;
 import org.apache.spark.sql.connector.write.SupportsTruncate;
 import org.apache.spark.sql.connector.write.Write;
 import org.apache.spark.sql.connector.write.WriteBuilder;
 import org.apache.spark.sql.connector.write.streaming.StreamingWrite;
+import org.apache.spark.sql.internal.connector.SupportsStreamingUpdateAsAppend;
 import org.apache.spark.sql.types.StructType;
 
 import java.util.List;
@@ -83,11 +86,49 @@ public class SparkWrite implements Write {
 
   @Override
   public StreamingWrite toStreaming() {
-    throw new UnsupportedOperationException();
+    // Staged commits are CTAS / REPLACE TABLE flows that eagerly materialize a commit object
+    // on the driver, to be committed once via Table.commitStagedChanges(). Streaming writes
+    // commit once per epoch and are fundamentally incompatible with that model.
+    if (stagedCommit != null) {
+      throw LanceStreamingExceptions.stagedTableNotSupported();
+    }
+
+    // Pre-build the batch writer factory here (same package, can call the protected constructor)
+    // and pass it into LanceStreamingWrite so it doesn't need to duplicate per-task wiring.
+    LanceDataWriter.WriterFactory batchWriterFactory =
+        new LanceDataWriter.WriterFactory(
+            schema,
+            writeOptions,
+            initialStorageOptions,
+            namespaceImpl,
+            namespaceProperties,
+            tableId);
+
+    return new LanceStreamingWrite(
+        schema,
+        writeOptions,
+        overwrite,
+        initialStorageOptions,
+        namespaceImpl,
+        namespaceProperties,
+        tableId,
+        managedVersioning,
+        batchWriterFactory);
   }
 
-  /** Spark write builder. */
-  public static class SparkWriteBuilder implements SupportsTruncate, WriteBuilder {
+  /**
+   * Spark write builder.
+   *
+   * <p>Implements {@link SupportsStreamingUpdateAsAppend} — an internal Spark marker interface that
+   * tells the streaming engine's {@code V2Writes} analyzer that this sink accepts {@code Update}
+   * output mode by treating the emitted rows as appends. Spark's analyzer checks this interface on
+   * the {@code WriteBuilder} (not on the resulting {@code Write}) when resolving a streaming
+   * query's output mode. Without this marker, Spark rejects {@code .outputMode("update")} at query
+   * analysis time. See the "Update output mode semantics" section in {@code
+   * docs/src/operations/streaming/streaming-writes.md} for the documented trade-offs.
+   */
+  public static class SparkWriteBuilder
+      implements SupportsTruncate, WriteBuilder, SupportsStreamingUpdateAsAppend {
     private final LanceSparkWriteOptions writeOptions;
     private final StructType schema;
     private boolean overwrite = false;
@@ -145,6 +186,8 @@ public class SparkWrite implements Write {
                   .queueDepth(writeOptions.getQueueDepth())
                   .useQueuedWriteBuffer(writeOptions.isUseQueuedWriteBuffer())
                   .enableStableRowIds(writeOptions.getEnableStableRowIds())
+                  .streamingQueryId(writeOptions.getStreamingQueryId())
+                  .maxRecoveryLookback(writeOptions.getMaxRecoveryLookback())
                   .writeMode(WriteParams.WriteMode.OVERWRITE)
                   .build();
 

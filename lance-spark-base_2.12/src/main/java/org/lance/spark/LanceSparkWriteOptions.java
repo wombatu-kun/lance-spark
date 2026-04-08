@@ -57,11 +57,30 @@ public class LanceSparkWriteOptions implements Serializable {
   public static final String CONFIG_BATCH_SIZE = "batch_size";
   public static final String CONFIG_ENABLE_STABLE_ROW_IDS = "enable_stable_row_ids";
 
+  /**
+   * Streaming query identifier used as the disambiguating key for the per-query epoch watermark and
+   * recovery scan. MUST be unique per logical streaming query across the entire Spark cluster.
+   * Required for {@code writeStream} operations.
+   */
+  public static final String CONFIG_STREAMING_QUERY_ID = "streamingQueryId";
+
+  /**
+   * Maximum number of historical Lance versions to walk when recovering from a crash between Txn1
+   * (Append) and Txn2 (UpdateConfig) in the streaming commit protocol. The scan looks for a
+   * transaction whose properties match the current {@code streamingQueryId}/{@code epochId} pair;
+   * if found, Txn1 is skipped and only Txn2 is re-executed. With more than this many unrelated
+   * commits between the crash and the retry, the streaming guarantee degrades from exactly-once to
+   * at-least-once. Default is {@value #DEFAULT_MAX_RECOVERY_LOOKBACK}.
+   */
+  public static final String CONFIG_MAX_RECOVERY_LOOKBACK = "maxRecoveryLookback";
+
   private static final WriteMode DEFAULT_WRITE_MODE = WriteMode.APPEND;
   private static final boolean DEFAULT_USE_QUEUED_WRITE_BUFFER = false;
   private static final int DEFAULT_QUEUE_DEPTH = 8;
   // Changed from 512 to 8192 for better write performance consistency with read path
   private static final int DEFAULT_BATCH_SIZE = 8192;
+  private static final int DEFAULT_MAX_RECOVERY_LOOKBACK = 100;
+  private static final int MAX_RECOVERY_LOOKBACK_UPPER_BOUND = 10_000;
 
   private final String datasetUri;
   private final WriteMode writeMode;
@@ -75,6 +94,9 @@ public class LanceSparkWriteOptions implements Serializable {
   // Boxed so we can represent "unset" (null): when null, callers omit the flag and lance-core
   // inherits from the manifest (e.g. append without re-specifying). Staged commit uses primitives.
   private final Boolean enableStableRowIds;
+  // Streaming-only options. Null for non-streaming writes.
+  private final String streamingQueryId;
+  private final int maxRecoveryLookback;
   private final Map<String, String> storageOptions;
 
   /** The namespace for credential vending. Transient as LanceNamespace is not serializable. */
@@ -94,6 +116,8 @@ public class LanceSparkWriteOptions implements Serializable {
     this.queueDepth = builder.queueDepth;
     this.batchSize = builder.batchSize;
     this.enableStableRowIds = builder.enableStableRowIds;
+    this.streamingQueryId = builder.streamingQueryId;
+    this.maxRecoveryLookback = builder.maxRecoveryLookback;
     this.storageOptions = new HashMap<>(builder.storageOptions);
     this.namespace = builder.namespace;
     this.tableId = builder.tableId;
@@ -166,6 +190,21 @@ public class LanceSparkWriteOptions implements Serializable {
   /** Nullable when the write option was not specified (see field comment above). */
   public Boolean getEnableStableRowIds() {
     return enableStableRowIds;
+  }
+
+  /**
+   * @return streaming query identifier, or {@code null} if this options bag is not associated with
+   *     a streaming query. Required for streaming writes (enforced by {@code LanceStreamingWrite}).
+   */
+  public String getStreamingQueryId() {
+    return streamingQueryId;
+  }
+
+  /**
+   * @return maximum lookback window for the streaming commit recovery scan.
+   */
+  public int getMaxRecoveryLookback() {
+    return maxRecoveryLookback;
   }
 
   public Map<String, String> getStorageOptions() {
@@ -272,6 +311,8 @@ public class LanceSparkWriteOptions implements Serializable {
         && Objects.equals(maxBytesPerFile, that.maxBytesPerFile)
         && Objects.equals(fileFormatVersion, that.fileFormatVersion)
         && Objects.equals(enableStableRowIds, that.enableStableRowIds)
+        && Objects.equals(streamingQueryId, that.streamingQueryId)
+        && maxRecoveryLookback == that.maxRecoveryLookback
         && Objects.equals(storageOptions, that.storageOptions)
         && Objects.equals(tableId, that.tableId);
   }
@@ -289,6 +330,8 @@ public class LanceSparkWriteOptions implements Serializable {
         queueDepth,
         batchSize,
         enableStableRowIds,
+        streamingQueryId,
+        maxRecoveryLookback,
         storageOptions,
         tableId);
   }
@@ -305,6 +348,8 @@ public class LanceSparkWriteOptions implements Serializable {
     private int queueDepth = DEFAULT_QUEUE_DEPTH;
     private int batchSize = DEFAULT_BATCH_SIZE;
     private Boolean enableStableRowIds;
+    private String streamingQueryId;
+    private int maxRecoveryLookback = DEFAULT_MAX_RECOVERY_LOOKBACK;
     private Map<String, String> storageOptions = new HashMap<>();
     private LanceNamespace namespace;
     private List<String> tableId;
@@ -361,6 +406,22 @@ public class LanceSparkWriteOptions implements Serializable {
       return this;
     }
 
+    public Builder streamingQueryId(String streamingQueryId) {
+      this.streamingQueryId = streamingQueryId;
+      return this;
+    }
+
+    public Builder maxRecoveryLookback(int maxRecoveryLookback) {
+      Preconditions.checkArgument(
+          maxRecoveryLookback >= 1 && maxRecoveryLookback <= MAX_RECOVERY_LOOKBACK_UPPER_BOUND,
+          "maxRecoveryLookback must be between 1 and "
+              + MAX_RECOVERY_LOOKBACK_UPPER_BOUND
+              + ", got "
+              + maxRecoveryLookback);
+      this.maxRecoveryLookback = maxRecoveryLookback;
+      return this;
+    }
+
     public Builder storageOptions(Map<String, String> storageOptions) {
       this.storageOptions = new HashMap<>(storageOptions);
       return this;
@@ -413,6 +474,19 @@ public class LanceSparkWriteOptions implements Serializable {
       }
       if (options.containsKey(CONFIG_ENABLE_STABLE_ROW_IDS)) {
         this.enableStableRowIds = Boolean.parseBoolean(options.get(CONFIG_ENABLE_STABLE_ROW_IDS));
+      }
+      if (options.containsKey(CONFIG_STREAMING_QUERY_ID)) {
+        this.streamingQueryId = options.get(CONFIG_STREAMING_QUERY_ID);
+      }
+      if (options.containsKey(CONFIG_MAX_RECOVERY_LOOKBACK)) {
+        int parsed = Integer.parseInt(options.get(CONFIG_MAX_RECOVERY_LOOKBACK));
+        Preconditions.checkArgument(
+            parsed >= 1 && parsed <= MAX_RECOVERY_LOOKBACK_UPPER_BOUND,
+            "maxRecoveryLookback must be between 1 and "
+                + MAX_RECOVERY_LOOKBACK_UPPER_BOUND
+                + ", got "
+                + parsed);
+        this.maxRecoveryLookback = parsed;
       }
       return this;
     }

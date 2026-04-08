@@ -3,3 +3,4 @@ nav:
   - ddl
   - dql
   - dml
+  - streaming

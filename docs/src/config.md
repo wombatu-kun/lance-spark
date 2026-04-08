@@ -472,6 +472,51 @@ The parent configuration effectively "anchors" your Spark catalog at a specific 
 hierarchy, making the extra levels transparent to Spark users while maintaining compatibility with the underlying
 namespace implementation.
 
+## Streaming Write Configuration
+
+Options specific to the Spark Structured Streaming sink. Pass them via
+`writeStream.option("<key>", "<value>")` alongside the standard `path` and
+`checkpointLocation` options. See [Streaming Writes](operations/streaming/streaming-writes.md)
+for the full usage guide.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `streamingQueryId` | String | Yes | Globally-unique identifier for the streaming query. Used as the per-query idempotency key for the epoch watermark and for the bounded-lookback recovery scan. MUST be unique across all streaming queries writing to the same Lance table. |
+| `maxRecoveryLookback` | Int | No (default: `100`) | Maximum number of historical Lance versions to walk during the crash-between-Txn1-and-Txn2 recovery scan. Values `1..10000`. Larger values strengthen exactly-once guarantees under heavy concurrent writes at the cost of slower crash recovery. |
+
+=== "PySpark"
+    ```python
+    (stream_df.writeStream.format("lance")
+        .option("path", "/path/to/lance/table")
+        .option("checkpointLocation", "/path/to/checkpoint")
+        .option("streamingQueryId", "my-query-v1")
+        .option("maxRecoveryLookback", "500")
+        .outputMode("append")
+        .start())
+    ```
+
+=== "Scala"
+    ```scala
+    streamDf.writeStream.format("lance")
+      .option("path", "/path/to/lance/table")
+      .option("checkpointLocation", "/path/to/checkpoint")
+      .option("streamingQueryId", "my-query-v1")
+      .option("maxRecoveryLookback", "500")
+      .outputMode("append")
+      .start()
+    ```
+
+=== "Java"
+    ```java
+    streamDf.writeStream().format("lance")
+        .option("path", "/path/to/lance/table")
+        .option("checkpointLocation", "/path/to/checkpoint")
+        .option("streamingQueryId", "my-query-v1")
+        .option("maxRecoveryLookback", "500")
+        .outputMode("append")
+        .start();
+    ```
+
 ## Memory Configuration
 
 Lance Spark uses Arrow for data transfer between native code and Spark, and maintains caches for improved performance.

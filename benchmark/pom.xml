@@ -7,8 +7,8 @@
     <version>0.3.0-beta.1</version>
     <packaging>jar</packaging>
 
-    <name>Lance Spark TPC-DS Benchmark</name>
-    <description>TPC-DS benchmark for Lance Spark connector</description>
+    <name>Lance Spark Benchmark (TPC-DS + TPC-H)</name>
+    <description>TPC-DS and TPC-H benchmarks for Lance Spark connector</description>
 
     <properties>
         <spark.compat.version>3.5</spark.compat.version>
@@ -33,6 +33,13 @@
             <artifactId>kyuubi-spark-connector-tpcds_${scala.compat.version}</artifactId>
             <version>${kyuubi.version}</version>
         </dependency>
+        <!-- Kyuubi TPC-H connector: pure-Spark data source for parallel TPC-H
+             data generation. No external dbgen binary needed. -->
+        <dependency>
+            <groupId>org.apache.kyuubi</groupId>
+            <artifactId>kyuubi-spark-connector-tpch_${scala.compat.version}</artifactId>
+            <version>${kyuubi.version}</version>
+        </dependency>
     </dependencies>
 
     <build>
@@ -48,13 +55,6 @@
             <plugin>
                 <artifactId>maven-jar-plugin</artifactId>
                 <version>3.4.2</version>
-                <configuration>
-                    <archive>
-                        <manifest>
-                            <mainClass>org.lance.spark.benchmark.TpcdsBenchmarkRunner</mainClass>
-                        </manifest>
-                    </archive>
-                </configuration>
             </plugin>
             <plugin>
                 <artifactId>maven-shade-plugin</artifactId>
@@ -67,9 +67,6 @@
                         </goals>
                         <configuration>
                             <transformers>
-                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                                    <mainClass>org.lance.spark.benchmark.TpcdsBenchmarkRunner</mainClass>
-                                </transformer>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer" />
                             </transformers>
                             <filters>

@@ -231,6 +231,21 @@ benchmark-run:
 .PHONY: benchmark
 benchmark: benchmark-generate benchmark-run
 
+.PHONY: benchmark-tpch-generate
+benchmark-tpch-generate:
+	cd benchmark && \
+		SPARK_VERSION=$(SPARK_VERSION) SCALA_VERSION=$(SCALA_VERSION) \
+		./scripts/generate-tpch-data.sh $(SF) $(FORMATS) $(SPARK_MASTER)
+
+.PHONY: benchmark-tpch-run
+benchmark-tpch-run:
+	cd benchmark && \
+		SPARK_VERSION=$(SPARK_VERSION) SCALA_VERSION=$(SCALA_VERSION) \
+		./scripts/run-tpch-benchmark.sh $(FORMATS) $(SPARK_MASTER) $(ITERATIONS)
+
+.PHONY: benchmark-tpch
+benchmark-tpch: benchmark-tpch-generate benchmark-tpch-run
+
 SF ?= 1
 FORMATS ?= lance,parquet
 SPARK_MASTER ?= local[*]
@@ -282,10 +297,13 @@ help:
 	@echo "  docker-test            - Run integration tests in lance-spark-test container"
 	@echo ""
 	@echo "Benchmark:"
-	@echo "  benchmark-build        - Build benchmark jar"
-	@echo "  benchmark-generate     - Generate TPC-DS data via Spark (SF=1 FORMATS=lance,parquet)"
-	@echo "  benchmark-run          - Run TPC-DS queries (FORMATS=lance,parquet ITERATIONS=3)"
-	@echo "  benchmark              - Generate data + run queries (end-to-end)"
+	@echo "  benchmark-build         - Build benchmark jar (shared by TPC-DS and TPC-H)"
+	@echo "  benchmark-generate      - Generate TPC-DS data via Spark (SF=1 FORMATS=lance,parquet)"
+	@echo "  benchmark-run           - Run TPC-DS queries (FORMATS=lance,parquet ITERATIONS=3)"
+	@echo "  benchmark               - Generate TPC-DS data + run queries (end-to-end)"
+	@echo "  benchmark-tpch-generate - Generate TPC-H data via Spark (SF=1 FORMATS=lance,parquet)"
+	@echo "  benchmark-tpch-run      - Run TPC-H queries (FORMATS=lance,parquet ITERATIONS=3)"
+	@echo "  benchmark-tpch          - Generate TPC-H data + run queries (end-to-end)"
 	@echo ""
 	@echo "Documentation:"
 	@echo "  serve-docs     - Serve documentation locally"

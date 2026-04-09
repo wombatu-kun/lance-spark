@@ -24,9 +24,16 @@ import java.util.Map;
 public class BenchmarkReporter {
 
   private final List<BenchmarkResult> results;
+  private final String benchmarkName;
 
+  /** Backward-compatible constructor — defaults the benchmark name to "TPC-DS". */
   public BenchmarkReporter(List<BenchmarkResult> results) {
+    this(results, "TPC-DS");
+  }
+
+  public BenchmarkReporter(List<BenchmarkResult> results, String benchmarkName) {
     this.results = results;
+    this.benchmarkName = benchmarkName;
   }
 
   public void writeCsv(String outputPath) throws IOException {
@@ -91,7 +98,7 @@ public class BenchmarkReporter {
     boolean hasMetrics = results.stream().anyMatch(r -> r.getMetrics() != null);
 
     System.out.println();
-    System.out.println("=== TPC-DS Benchmark Summary ===");
+    System.out.println("=== " + benchmarkName + " Benchmark Summary ===");
     System.out.println();
 
     StringBuilder header = new StringBuilder(String.format("%-8s", "Query"));

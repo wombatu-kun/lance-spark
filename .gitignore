@@ -88,4 +88,14 @@ spark-warehouse/
 # Benchmark
 benchmark/results/
 benchmark/data/
+benchmark/streaming-data/
+benchmark/streaming-results/*
+# Keep the curated reference CSVs + their README in version control. Local re-runs of the
+# streaming-scalability benchmark write fresh CSVs alongside these — the negation only
+# whitelists the four committed reference files, so new runs stay ignored.
+!benchmark/streaming-results/README.md
+!benchmark/streaming-results/streaming_E1_20260413_094028.csv
+!benchmark/streaming-results/streaming_E2_20260413_091542.csv
+!benchmark/streaming-results/streaming_E3_20260413_103456.csv
+!benchmark/streaming-results/streaming_E4_20260413_103909.csv
 benchmark/tools/

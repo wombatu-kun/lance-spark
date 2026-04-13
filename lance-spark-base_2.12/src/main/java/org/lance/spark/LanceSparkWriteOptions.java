@@ -80,6 +80,11 @@ public class LanceSparkWriteOptions implements Serializable {
   // Changed from 512 to 8192 for better write performance consistency with read path
   private static final int DEFAULT_BATCH_SIZE = 8192;
   private static final boolean DEFAULT_USE_LARGE_VAR_TYPES = false;
+  // Sized for single-writer streaming pipelines. The recovery scan walks N historical versions
+  // on restart, costing ~0.5 ms per version on local FS (benchmark E3) — so the default of 100
+  // bounds restart latency at ~50 ms regardless of dataset history depth. Raise only when
+  // multiple concurrent writers can interleave more than 100 unrelated commits between a Txn1
+  // and its Txn2 retry — see docs/src/operations/streaming/streaming-writes.md.
   private static final int DEFAULT_MAX_RECOVERY_LOOKBACK = 100;
   private static final int MAX_RECOVERY_LOOKBACK_UPPER_BOUND = 10_000;
 

@@ -14,6 +14,8 @@
         <spark.compat.version>3.5</spark.compat.version>
         <scala.compat.version>2.12</scala.compat.version>
         <kyuubi.version>1.11.0</kyuubi.version>
+        <lance-spark.version>0.4.0-beta.1</lance-spark.version>
+        <lance.version>5.0.0-beta.6</lance.version>
         <java.release>11</java.release>
         <maven.compiler.release>${java.release}</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -32,6 +34,23 @@
             <groupId>org.apache.kyuubi</groupId>
             <artifactId>kyuubi-spark-connector-tpcds_${scala.compat.version}</artifactId>
             <version>${kyuubi.version}</version>
+        </dependency>
+        <!-- Lance Spark base (provided at runtime via the bundle jar passed to spark-submit).
+             Needed only for compile-time access to LanceRuntime, StreamingCommitProtocol,
+             and the option constants used by the streaming-scalability benchmark. -->
+        <dependency>
+            <groupId>org.lance</groupId>
+            <artifactId>lance-spark-base_${scala.compat.version}</artifactId>
+            <version>${lance-spark.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <!-- Lance core (provided via the bundle jar). Used to open the dataset post-commit
+             from the streaming benchmark listener for fragment-count / version metrics. -->
+        <dependency>
+            <groupId>org.lance</groupId>
+            <artifactId>lance-core</artifactId>
+            <version>${lance.version}</version>
+            <scope>provided</scope>
         </dependency>
     </dependencies>
 

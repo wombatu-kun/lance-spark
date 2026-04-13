@@ -205,3 +205,135 @@ model. Attempting to use it will throw `UnsupportedOperationException`.
 - **The `streamingQueryId` option is required** and must be globally unique. Running two
   streaming queries with the same `streamingQueryId` against the same Lance table is a
   misconfiguration and will produce version conflicts.
+
+## Scalability and Operational Tuning
+
+Each micro-batch performs **two Lance manifest updates** — Txn1 (`Append` of the batch's
+fragments) and Txn2 (`UpdateConfig` to bump the per-query epoch watermark). The dataset version
+therefore advances by exactly **2 per micro-batch**, and the manifest grows linearly with the
+number of fragments. Each commit re-serializes the entire manifest, so commit latency grows
+linearly with fragment count.
+
+> **Periodic `OPTIMIZE` is required, not optional.** Without compaction, a sustained streaming
+> workload will eventually have per-commit latency exceed its trigger interval and start
+> building unbounded backpressure. Numbers below.
+
+The numbers come from the streaming-scalability benchmark in
+[`benchmark/`](https://github.com/lance-format/lance-spark/tree/main/benchmark) — see
+`benchmark/streaming-results/` for the raw CSVs and `benchmark/scripts/run-streaming-benchmark.sh`
+to reproduce them. The reference workload is **5 000 rows per micro-batch on a `local[12]`
+driver writing to local FS**; absolute milliseconds will differ on your hardware, but the
+*shapes* of the curves transfer.
+
+### Manifest and latency growth without `OPTIMIZE`
+
+In the reference run, the manifest grew at ~**83 bytes per fragment**. With Spark producing one
+fragment per task (12 on `local[12]`), each batch added ~**1 KB to the manifest** and ~**0.1 ms
+to subsequent commit latency**. Measured per-commit latency, bucketed by fragment count over a
+~2 000-batch run with no compaction:
+
+| Fragment count | Manifest size | p50 commit | p90 commit | p99 commit |
+|---------------:|--------------:|-----------:|-----------:|-----------:|
+| 0 – 5 000      | ~0 – 0.4 MB   | 243 ms     | 387 ms     | 466 ms     |
+| 5 000 – 10 000 | 0.4 – 0.8 MB  | 692 ms     | 936 ms     | 1.12 s     |
+| 10 000 – 15 000 | 0.8 – 1.2 MB | **1.19 s** | 1.40 s     | 1.83 s     |
+| 15 000 – 20 000 | 1.2 – 1.7 MB | 1.80 s     | 2.15 s     | 2.53 s     |
+| 20 000 – 25 000 | 1.7 – 2.1 MB | 2.29 s     | 2.51 s     | 2.89 s     |
+
+The relationship is essentially linear: **p50 commit (ms) ≈ 0.1 × `fragment_count`** on the
+reference setup. Extrapolated:
+
+- 100 000 fragments → ~10 s per commit
+- 1 000 000 fragments → ~100 s per commit
+
+For a `processingTime("1 second")` trigger, **commit latency exceeds the trigger interval at
+~10 000 fragments**, which is reached after ~840 batches at default parallelism — i.e. minutes
+to a few hours of sustained streaming, depending on input rate.
+
+### `OPTIMIZE` keeps it bounded
+
+E2 in the benchmark runs the same workload but invokes `OPTIMIZE` every K batches, collapsing
+the accumulated small fragments into one. Steady-state behaviour:
+
+| `OPTIMIZE` cadence | Steady-state `fragment_count` | Steady-state `manifest_bytes` | p50 commit | p90 commit |
+|--------------------|------------------------------:|------------------------------:|-----------:|-----------:|
+| **Never** (E1)     | grows without bound           | grows without bound           | drifts up  | drifts up  |
+| Every **50** batches  | ~600 (1 compacted + 600 new) | ~50 KB                       | **157 ms** | **191 ms** |
+| Every **200** batches | cycles 600 ↔ 2 400          | cycles 50 KB ↔ 200 KB        | 190 ms     | 250 ms     |
+
+With every-50, p50 commit latency stays roughly **8× lower** than the same workload without
+compaction at 5k+ fragments, and stops drifting upward.
+
+A pragmatic default is **`OPTIMIZE` every 50–200 micro-batches**: every-50 holds latency
+flattest, every-200 still bounds it but lets the manifest swing 4× between compactions. Tune
+based on how tight your batch-time SLO is.
+
+### Recommended trigger intervals
+
+Pick `processingTime` based on **data-freshness latency target**, not throughput. At a fixed
+input rate, achieved throughput is identical across trigger intervals on the reference setup —
+what changes is fragment-accumulation rate (and therefore how often `OPTIMIZE` must run).
+
+Measured at 1 000 rows/s sustained for 2 minutes:
+
+| Trigger | Achieved rate | p90 commit | Final `fragment_count` | Margin under trigger |
+|---------|--------------:|-----------:|-----------------------:|---------------------:|
+| 1 s     | 1 008 rows/s  | 197 ms     | 1 428                  | ~80% headroom        |
+| 5 s     | 1 009 rows/s  | 94 ms      | 288                    | ~98% headroom        |
+| 15 s    | 1 010 rows/s  | 80 ms      | 96                     | ~99% headroom        |
+
+So `processingTime ≥ ~1 s` is safe on local FS at this rate — even at 1 400+ fragments, p90
+commit (197 ms) sits at ~20% of the 1 s budget. Tighter triggers (e.g. `processingTime("200ms")`)
+would put commit time at the same order as the trigger interval and start building
+back-pressure.
+
+For object storage (S3, GCS, Azure Blob) commit latency is dominated by put / list round-trips
+(typically 50–200 ms each, ×2 for the two transactions). Plan for `processingTime ≥ ~5
+seconds` there; this range is not yet measured in-tree and your own benchmark on representative
+storage is recommended before committing to a value.
+
+`Trigger.Continuous("…")` is **not supported** — use the smallest acceptable `processingTime`
+instead.
+
+### How to schedule `OPTIMIZE`
+
+Co-locate it with the streaming query via `foreachBatch`, or run it out-of-band on a cron with
+the same Spark job configuration:
+
+```sql
+-- Run alongside the streaming query (separate Spark session)
+OPTIMIZE lance.`/path/to/streaming/table`;
+
+-- With explicit options
+OPTIMIZE lance.`/path/to/table` WITH (target_rows_per_fragment = 1000000);
+```
+
+For very high commit rates (sub-second triggers, sustained), compact more aggressively (every
+20–50 batches). For low rates (≥ 30 s triggers), compaction can be much less frequent (hourly
+or daily).
+
+### Tuning `maxRecoveryLookback`
+
+The recovery scan walks back through up to `maxRecoveryLookback` Lance versions on the first
+commit after a restart, reading each version's transaction properties to find a matching
+`(streamingQueryId, epochId)`. Actual cost is `0.5 ms × min(maxRecoveryLookback,
+current_version)` on the reference setup — i.e. the lookback is a *cap*, not a floor; a small
+table never pays for unused headroom.
+
+Measured (E3 in the benchmark, local FS, 5 trials per point):
+
+| `current_version` | `maxRecoveryLookback` | versions actually visited | avg restart cost |
+|------------------:|----------------------:|--------------------------:|-----------------:|
+| 100               | 100 / 500 / 1 000     | 100                       | ~18 ms           |
+| 1 000             | 100 (default)         | 100                       | 75 ms            |
+| 1 000             | 1 000                 | 1 000                     | 507 ms           |
+| 10 000 (extrapolated) | 10 000 (max)      | 10 000                    | ~5 s             |
+
+The default of `100` is sized for single-writer streaming pipelines: restart cost stays under
+~75 ms regardless of how many historical versions the table has. Raise it (up to the hard cap
+of `10 000`) only if multiple writers commit concurrently to the same table at a rate where
+more than 100 unrelated commits could land between a Txn1 and the next Txn2 retry — otherwise
+the larger lookback is overhead paid for nothing.
+
+Recovery cost is paid **once per query restart**, not per commit, so even the worst-case
+~5 s scan is acceptable for typical ETL pipelines that restart at most a few times a day.

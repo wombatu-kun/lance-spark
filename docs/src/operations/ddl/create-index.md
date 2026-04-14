@@ -5,6 +5,10 @@ Creates a scalar index on a Lance table to accelerate queries.
 !!! warning "Spark Extension Required"
     This feature requires the Lance Spark SQL extension to be enabled. See [Spark SQL Extensions](../../config.md#spark-sql-extensions) for configuration details.
 
+!!! tip "Looking for vector (ANN) indexes?"
+    See [CREATE VECTOR INDEX](create-vector-index.md) for `ivf_flat` / `ivf_pq` / `ivf_hnsw_pq` /
+    `ivf_hnsw_sq` and the companion [lance_vector_search](../dql/vector-search.md) query TVF.
+
 ## Overview
 
 The `CREATE INDEX` command builds an index on one or more columns of a Lance table. Indexing can improve the performance of queries that filter on the indexed columns. This operation is performed in a distributed manner, building indexes for each data fragment in parallel.

@@ -18,6 +18,13 @@ public class LanceConstant {
   public static final String ROW_ID = "_rowid";
   public static final String ROW_ADDRESS = "_rowaddr";
 
+  /**
+   * Virtual column Lance auto-appends to each batch when {@code ScanOptions.nearest(…)} is set.
+   * Carries the Float32 distance (per selected metric) between the row's vector and the query
+   * vector. Only present on the vector-search read path.
+   */
+  public static final String DISTANCE = "_distance";
+
   // CDF (Change Data Feed) version tracking columns
   public static final String ROW_CREATED_AT_VERSION = "_row_created_at_version";
   public static final String ROW_LAST_UPDATED_AT_VERSION = "_row_last_updated_at_version";

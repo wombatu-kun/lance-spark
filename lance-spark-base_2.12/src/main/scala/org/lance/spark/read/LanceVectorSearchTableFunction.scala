@@ -102,7 +102,16 @@ object LanceVectorSearchTableFunction {
     storageOptions.foreach { case (k, v) => reader.option(k, v) }
     reader.option(LanceSparkReadOptions.CONFIG_NEAREST, queryJson)
 
-    reader.load(datasetUri).queryExecution.analyzed
+    val analyzed = reader.load(datasetUri).queryExecution.analyzed
+    // Wrap the underlying LanceDataset in a decorator that surfaces the virtual `_distance`
+    // column in the relation's schema. Done here (not in `LanceDataSource.getTable`) because
+    // `SupportsCatalogOptions` routes `.load()` through `catalog.loadTable(ident)`, which
+    // bypasses `getTable` and never sees the per-read `nearest` option.
+    analyzed.transformUp {
+      case rel: DataSourceV2Relation if rel.table.isInstanceOf[LanceDataset] =>
+        val wrapped = new LanceVectorSearchTable(rel.table.asInstanceOf[LanceDataset])
+        DataSourceV2Relation.create(wrapped, rel.catalog, rel.identifier, rel.options)
+    }
   }
 
   // ─── Argument parsing ──────────────────────────────────────────────────────

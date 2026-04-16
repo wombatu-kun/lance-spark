@@ -25,6 +25,7 @@ import org.apache.spark.sql.connector.expressions.FieldReference;
 import org.apache.spark.sql.connector.expressions.aggregate.AggregateFunc;
 import org.apache.spark.sql.connector.expressions.aggregate.Aggregation;
 import org.apache.spark.sql.connector.expressions.aggregate.CountStar;
+import org.apache.spark.sql.connector.expressions.filter.Predicate;
 import org.apache.spark.sql.connector.read.Batch;
 import org.apache.spark.sql.connector.read.InputPartition;
 import org.apache.spark.sql.connector.read.PartitionReader;
@@ -37,7 +38,6 @@ import org.apache.spark.sql.connector.read.partitioning.KeyGroupedPartitioning;
 import org.apache.spark.sql.connector.read.partitioning.Partitioning;
 import org.apache.spark.sql.connector.read.partitioning.UnknownPartitioning;
 import org.apache.spark.sql.internal.connector.SupportsMetadata;
-import org.apache.spark.sql.sources.Filter;
 import org.apache.spark.sql.types.StructType;
 import org.apache.spark.sql.vectorized.ColumnarBatch;
 import org.slf4j.Logger;
@@ -71,7 +71,7 @@ public class LanceScan
   private final Optional<Integer> offset;
   private final Optional<List<ColumnOrdering>> topNSortOrders;
   private final Optional<Aggregation> pushedAggregation;
-  private final Filter[] pushedFilters;
+  private final Predicate[] pushedPredicates;
   private final LanceStatistics statistics;
   private final String scanId = UUID.randomUUID().toString();
 
@@ -116,7 +116,7 @@ public class LanceScan
       Optional<Integer> offset,
       Optional<List<ColumnOrdering>> topNSortOrders,
       Optional<Aggregation> pushedAggregation,
-      Filter[] pushedFilters,
+      Predicate[] pushedPredicates,
       LanceStatistics statistics,
       java.util.Map<String, List<ZoneStats>> zonemapStats,
       Set<Integer> survivingFragmentIds,
@@ -131,8 +131,10 @@ public class LanceScan
     this.offset = offset;
     this.topNSortOrders = topNSortOrders;
     this.pushedAggregation = pushedAggregation;
-    this.pushedFilters =
-        pushedFilters != null ? Arrays.copyOf(pushedFilters, pushedFilters.length) : new Filter[0];
+    this.pushedPredicates =
+        pushedPredicates != null
+            ? Arrays.copyOf(pushedPredicates, pushedPredicates.length)
+            : new Predicate[0];
     this.statistics = statistics;
     this.zonemapStats = zonemapStats != null ? zonemapStats : Collections.emptyMap();
     this.cachedSurvivingFragmentIds = survivingFragmentIds;
@@ -217,7 +219,7 @@ public class LanceScan
    */
   private List<LanceSplit> pruneByRowAddrFilters(List<LanceSplit> allSplits) {
     java.util.Optional<Set<Integer>> targetFragmentIds =
-        RowAddressFilterAnalyzer.extractTargetFragmentIds(pushedFilters);
+        RowAddressFilterAnalyzer.extractTargetFragmentIds(pushedPredicates);
     if (!targetFragmentIds.isPresent()) {
       return allSplits;
     }
@@ -329,7 +331,8 @@ public class LanceScan
     if (cachedSurvivingFragmentIds != null) {
       allowedIds = cachedSurvivingFragmentIds;
     } else if (!zonemapStats.isEmpty()) {
-      allowedIds = ZonemapFragmentPruner.pruneFragments(pushedFilters, zonemapStats).orElse(null);
+      allowedIds =
+          ZonemapFragmentPruner.pruneFragments(pushedPredicates, zonemapStats).orElse(null);
     } else {
       return allSplits;
     }
@@ -432,7 +435,7 @@ public class LanceScan
         && Objects.equals(offset, that.offset)
         && Objects.equals(topNSortOrders.toString(), that.topNSortOrders.toString())
         && aggregationEquals(pushedAggregation, that.pushedAggregation)
-        && equivalentFilters(pushedFilters, that.pushedFilters);
+        && equivalentPredicates(pushedPredicates, that.pushedPredicates);
   }
 
   @Override
@@ -440,7 +443,7 @@ public class LanceScan
     int result =
         Objects.hash(
             schema, readOptions, whereConditions, limit, offset, topNSortOrders.toString());
-    result = 31 * result + Arrays.hashCode(sortedByHash(pushedFilters));
+    result = 31 * result + Arrays.hashCode(sortedByHash(pushedPredicates));
     result = 31 * result + aggregationHashCode(pushedAggregation);
     return result;
   }
@@ -475,10 +478,10 @@ public class LanceScan
   }
 
   /**
-   * Returns whether two filter arrays are equivalent regardless of order. Follows Spark's {@code
+   * Returns whether two predicate arrays are equivalent regardless of order. Follows Spark's {@code
    * FileScan.equivalentFilters()}: sort by hashCode, then compare element-wise.
    */
-  private static boolean equivalentFilters(Filter[] a, Filter[] b) {
+  private static boolean equivalentPredicates(Predicate[] a, Predicate[] b) {
     return Arrays.equals(sortedByHash(a), sortedByHash(b));
   }
 

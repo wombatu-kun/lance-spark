@@ -27,20 +27,21 @@ import org.lance.spark.utils.Utils;
 import org.apache.spark.sql.catalyst.InternalRow;
 import org.apache.spark.sql.catalyst.expressions.GenericInternalRow;
 import org.apache.spark.sql.connector.expressions.FieldReference;
+import org.apache.spark.sql.connector.expressions.NamedReference;
 import org.apache.spark.sql.connector.expressions.NullOrdering;
 import org.apache.spark.sql.connector.expressions.SortDirection;
 import org.apache.spark.sql.connector.expressions.SortOrder;
 import org.apache.spark.sql.connector.expressions.aggregate.AggregateFunc;
 import org.apache.spark.sql.connector.expressions.aggregate.Aggregation;
 import org.apache.spark.sql.connector.expressions.aggregate.CountStar;
+import org.apache.spark.sql.connector.expressions.filter.Predicate;
 import org.apache.spark.sql.connector.read.Scan;
 import org.apache.spark.sql.connector.read.SupportsPushDownAggregates;
-import org.apache.spark.sql.connector.read.SupportsPushDownFilters;
 import org.apache.spark.sql.connector.read.SupportsPushDownLimit;
 import org.apache.spark.sql.connector.read.SupportsPushDownOffset;
 import org.apache.spark.sql.connector.read.SupportsPushDownRequiredColumns;
 import org.apache.spark.sql.connector.read.SupportsPushDownTopN;
-import org.apache.spark.sql.sources.Filter;
+import org.apache.spark.sql.connector.read.SupportsPushDownV2Filters;
 import org.apache.spark.sql.types.DataTypes;
 import org.apache.spark.sql.types.StructType;
 import org.slf4j.Logger;
@@ -57,7 +58,7 @@ import java.util.stream.Collectors;
 
 public class LanceScanBuilder
     implements SupportsPushDownRequiredColumns,
-        SupportsPushDownFilters,
+        SupportsPushDownV2Filters,
         SupportsPushDownLimit,
         SupportsPushDownOffset,
         SupportsPushDownTopN,
@@ -67,7 +68,7 @@ public class LanceScanBuilder
   private final LanceSparkReadOptions readOptions;
   private StructType schema;
 
-  private Filter[] pushedFilters = new Filter[0];
+  private Predicate[] pushedPredicates = new Predicate[0];
   private Optional<Integer> limit = Optional.empty();
   private Optional<Integer> offset = Optional.empty();
   private Optional<List<ColumnOrdering>> topNSortOrders = Optional.empty();
@@ -138,7 +139,7 @@ public class LanceScanBuilder
     ManifestSummary summary = getOrOpenDataset().getVersion().getManifestSummary();
 
     // Collect all columns that need zonemap stats: filter columns + partition column (if declared).
-    Set<String> columnsToLoad = extractReferencedColumns(pushedFilters);
+    Set<String> columnsToLoad = extractReferencedColumns(pushedPredicates);
     String partitionColumn = tableProperties.get(TABLE_OPT_PARTITION_COLUMNS);
     if (partitionColumn != null && !partitionColumn.trim().isEmpty()) {
       partitionColumn = partitionColumn.trim();
@@ -179,9 +180,9 @@ public class LanceScanBuilder
     // JoinSelection (BroadcastHashJoin vs SortMergeJoin) and (b) pass the cached result
     // to LanceScan to avoid re-computing during planInputPartitions().
     Set<Integer> survivingFragmentIds = null;
-    if (pushedFilters.length > 0 && !zonemapStats.isEmpty()) {
+    if (pushedPredicates.length > 0 && !zonemapStats.isEmpty()) {
       survivingFragmentIds =
-          ZonemapFragmentPruner.pruneFragments(pushedFilters, zonemapStats).orElse(null);
+          ZonemapFragmentPruner.pruneFragments(pushedPredicates, zonemapStats).orElse(null);
     }
 
     LanceStatistics statistics;
@@ -208,7 +209,8 @@ public class LanceScanBuilder
     // Close the lazily opened dataset - it's no longer needed after build
     closeLazyDataset();
 
-    Optional<String> whereCondition = FilterPushDown.compileFiltersToSqlWhereClause(pushedFilters);
+    Optional<String> whereCondition =
+        FilterPushDown.compileFiltersToSqlWhereClause(pushedPredicates);
     return new LanceScan(
         schema,
         readOptions,
@@ -217,7 +219,7 @@ public class LanceScanBuilder
         offset,
         topNSortOrders,
         pushedAggregation,
-        pushedFilters,
+        pushedPredicates,
         statistics,
         zonemapStats,
         survivingFragmentIds,
@@ -233,18 +235,18 @@ public class LanceScanBuilder
   }
 
   @Override
-  public Filter[] pushFilters(Filter[] filters) {
+  public Predicate[] pushPredicates(Predicate[] predicates) {
     if (!readOptions.isPushDownFilters()) {
-      return filters;
+      return predicates;
     }
-    Filter[][] processFilters = FilterPushDown.processFilters(filters);
-    pushedFilters = processFilters[0];
-    return processFilters[1];
+    Predicate[][] processed = FilterPushDown.processPredicates(predicates);
+    pushedPredicates = processed[0];
+    return processed[1];
   }
 
   @Override
-  public Filter[] pushedFilters() {
-    return pushedFilters;
+  public Predicate[] pushedPredicates() {
+    return pushedPredicates;
   }
 
   @Override
@@ -305,7 +307,7 @@ public class LanceScanBuilder
     }
     if (funcs.length == 1 && funcs[0] instanceof CountStar) {
       // Check if we can use metadata-based count (no filters pushed)
-      if (pushedFilters.length == 0) {
+      if (pushedPredicates.length == 0) {
         Optional<Long> metadataCount = getCountFromMetadata(getOrOpenDataset());
         if (metadataCount.isPresent()) {
           // Create LocalScan with pre-computed count result
@@ -393,11 +395,12 @@ public class LanceScanBuilder
     return columns;
   }
 
-  private static Set<String> extractReferencedColumns(Filter[] filters) {
+  private static Set<String> extractReferencedColumns(Predicate[] predicates) {
     Set<String> columns = new HashSet<>();
-    for (Filter filter : filters) {
-      for (String attr : filter.references()) {
-        columns.add(attr);
+    for (Predicate predicate : predicates) {
+      for (NamedReference ref : predicate.references()) {
+        String[] names = ref.fieldNames();
+        columns.add(names.length == 1 ? names[0] : String.join(".", names));
       }
     }
     return columns;

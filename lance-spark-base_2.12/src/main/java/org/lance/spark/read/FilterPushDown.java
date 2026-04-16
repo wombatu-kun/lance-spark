@@ -15,195 +15,206 @@ package org.lance.spark.read;
 
 import org.lance.spark.utils.Optional;
 
-import org.apache.spark.sql.sources.And;
-import org.apache.spark.sql.sources.EqualNullSafe;
-import org.apache.spark.sql.sources.EqualTo;
-import org.apache.spark.sql.sources.Filter;
-import org.apache.spark.sql.sources.GreaterThan;
-import org.apache.spark.sql.sources.GreaterThanOrEqual;
-import org.apache.spark.sql.sources.In;
-import org.apache.spark.sql.sources.IsNotNull;
-import org.apache.spark.sql.sources.IsNull;
-import org.apache.spark.sql.sources.LessThan;
-import org.apache.spark.sql.sources.LessThanOrEqual;
-import org.apache.spark.sql.sources.Not;
-import org.apache.spark.sql.sources.Or;
-import org.apache.spark.sql.sources.StringContains;
-import org.apache.spark.sql.sources.StringEndsWith;
-import org.apache.spark.sql.sources.StringStartsWith;
+import org.apache.spark.sql.connector.expressions.Expression;
+import org.apache.spark.sql.connector.expressions.Literal;
+import org.apache.spark.sql.connector.expressions.NamedReference;
+import org.apache.spark.sql.connector.expressions.filter.And;
+import org.apache.spark.sql.connector.expressions.filter.Not;
+import org.apache.spark.sql.connector.expressions.filter.Or;
+import org.apache.spark.sql.connector.expressions.filter.Predicate;
+import org.apache.spark.sql.types.DataTypes;
 
 import java.math.BigDecimal;
 import java.sql.Date;
 import java.sql.Timestamp;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
 
 public class FilterPushDown {
   /**
-   * Create SQL 'where clause' from Spark filters.
+   * Create SQL 'where clause' from Spark V2 predicates.
    *
-   * @param filters Supported spark filters
-   * @return where clause, or Optional.empty() if filters do not exist
+   * @param predicates Supported V2 predicates
+   * @return where clause, or Optional.empty() if no predicates compile to SQL
    */
-  public static Optional<String> compileFiltersToSqlWhereClause(Filter[] filters) {
-    if (filters.length == 0) {
+  public static Optional<String> compileFiltersToSqlWhereClause(Predicate[] predicates) {
+    if (predicates.length == 0) {
       return Optional.empty();
     }
-    List<String> compiledFilters = new ArrayList<>();
-    for (Filter filter : filters) {
-      compileFilter(filter).ifPresent(compiledFilters::add);
+    List<String> compiled = new ArrayList<>();
+    for (Predicate predicate : predicates) {
+      compilePredicate(predicate).ifPresent(compiled::add);
+    }
+    if (compiled.isEmpty()) {
+      return Optional.empty();
     }
     String whereClause =
-        compiledFilters.stream()
-            .map(filter -> "(" + filter + ")")
-            .collect(Collectors.joining(" AND "));
+        compiled.stream().map(p -> "(" + p + ")").collect(Collectors.joining(" AND "));
     return Optional.of(whereClause);
   }
 
   /**
-   * @param filters filters to see if Lance supported the filter push down
-   * @return the accepted push down filters (row 0) and rejected post scan filters (row 1)
+   * @param predicates predicates to check for Lance push-down support
+   * @return accepted push-down predicates (row 0) and rejected post-scan predicates (row 1)
    */
-  public static Filter[][] processFilters(Filter[] filters) {
-    List<Filter> acceptedFilters = new ArrayList<>();
-    List<Filter> rejectedFilters = new ArrayList<>();
+  public static Predicate[][] processPredicates(Predicate[] predicates) {
+    List<Predicate> accepted = new ArrayList<>();
+    List<Predicate> rejected = new ArrayList<>();
 
-    for (Filter filter : filters) {
-      if (isFilterSupported(filter)) {
-        acceptedFilters.add(filter);
+    for (Predicate predicate : predicates) {
+      if (isPredicateSupported(predicate)) {
+        accepted.add(predicate);
       } else {
-        rejectedFilters.add(filter);
+        rejected.add(predicate);
       }
     }
 
-    Filter[] acceptedArray = acceptedFilters.toArray(new Filter[0]);
-    Filter[] rejectedArray = rejectedFilters.toArray(new Filter[0]);
-
-    return new Filter[][] {acceptedArray, rejectedArray};
+    return new Predicate[][] {
+      accepted.toArray(new Predicate[0]), rejected.toArray(new Predicate[0])
+    };
   }
 
-  public static boolean isFilterSupported(Filter filter) {
-    if (filter instanceof EqualTo) {
-      return true;
-    } else if (filter instanceof EqualNullSafe) {
-      return false;
-    } else if (filter instanceof In) {
-      return true;
-    } else if (filter instanceof LessThan) {
-      return true;
-    } else if (filter instanceof LessThanOrEqual) {
-      return true;
-    } else if (filter instanceof GreaterThan) {
-      return true;
-    } else if (filter instanceof GreaterThanOrEqual) {
-      return true;
-    } else if (filter instanceof IsNull) {
-      return true;
-    } else if (filter instanceof IsNotNull) {
-      return true;
-    } else if (filter instanceof StringStartsWith) {
-      return false;
-    } else if (filter instanceof StringEndsWith) {
-      return false;
-    } else if (filter instanceof StringContains) {
-      return false;
-    } else if (filter instanceof Not) {
-      Not f = (Not) filter;
-      return isFilterSupported(f.child());
-    } else if (filter instanceof Or) {
-      Or f = (Or) filter;
-      return isFilterSupported(f.left()) && isFilterSupported(f.right());
-    } else if (filter instanceof And) {
-      And f = (And) filter;
-      return isFilterSupported(f.left()) && isFilterSupported(f.right());
-    } else {
-      return false;
+  public static boolean isPredicateSupported(Predicate predicate) {
+    if (predicate instanceof And) {
+      And and = (And) predicate;
+      return isPredicateSupported(and.left()) && isPredicateSupported(and.right());
+    }
+    if (predicate instanceof Or) {
+      Or or = (Or) predicate;
+      return isPredicateSupported(or.left()) && isPredicateSupported(or.right());
+    }
+    if (predicate instanceof Not) {
+      Not not = (Not) predicate;
+      return isPredicateSupported(not.child());
+    }
+    switch (predicate.name()) {
+      case "=":
+      case "<":
+      case "<=":
+      case ">":
+      case ">=":
+      case "IS_NULL":
+      case "IS_NOT_NULL":
+      case "IN":
+        return isColumnLiteralShape(predicate);
+      default:
+        return false;
     }
   }
 
-  private static Optional<String> compileFilter(Filter filter) {
-    if (filter instanceof GreaterThan) {
-      GreaterThan f = (GreaterThan) filter;
-      return Optional.of(f.attribute() + " > " + compileValue(f.value()));
-    } else if (filter instanceof LessThan) {
-      LessThan f = (LessThan) filter;
-      return Optional.of(f.attribute() + " < " + compileValue(f.value()));
-    } else if (filter instanceof LessThanOrEqual) {
-      LessThanOrEqual f = (LessThanOrEqual) filter;
-      return Optional.of(f.attribute() + " <= " + compileValue(f.value()));
-    } else if (filter instanceof GreaterThanOrEqual) {
-      GreaterThanOrEqual f = (GreaterThanOrEqual) filter;
-      return Optional.of(f.attribute() + " >= " + compileValue(f.value()));
-    } else if (filter instanceof EqualTo) {
-      EqualTo f = (EqualTo) filter;
-      return Optional.of(f.attribute() + " == " + compileValue(f.value()));
-    } else if (filter instanceof Or) {
-      Or f = (Or) filter;
-      Optional<String> left = compileFilter(f.left());
-      Optional<String> right = compileFilter(f.right());
-      if (left.isEmpty()) return right;
-      if (right.isEmpty()) return left;
-      return Optional.of(String.format("(%s) OR (%s)", left.get(), right.get()));
-    } else if (filter instanceof And) {
-      And f = (And) filter;
-      Optional<String> left = compileFilter(f.left());
-      Optional<String> right = compileFilter(f.right());
+  private static boolean isColumnLiteralShape(Predicate predicate) {
+    Expression[] children = predicate.children();
+    if (children.length == 0) {
+      return false;
+    }
+    if (!(children[0] instanceof NamedReference)) {
+      return false;
+    }
+    for (int i = 1; i < children.length; i++) {
+      if (!(children[i] instanceof Literal)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static Optional<String> compilePredicate(Predicate predicate) {
+    if (predicate instanceof And) {
+      And and = (And) predicate;
+      Optional<String> left = compilePredicate(and.left());
+      Optional<String> right = compilePredicate(and.right());
       if (left.isEmpty()) return right;
       if (right.isEmpty()) return left;
       return Optional.of(String.format("(%s) AND (%s)", left.get(), right.get()));
-    } else if (filter instanceof IsNull) {
-      IsNull f = (IsNull) filter;
-      return Optional.of(String.format("%s IS NULL", f.attribute()));
-    } else if (filter instanceof IsNotNull) {
-      IsNotNull f = (IsNotNull) filter;
-      return Optional.of(String.format("%s IS NOT NULL", f.attribute()));
-    } else if (filter instanceof Not) {
-      Not f = (Not) filter;
-      Optional<String> child = compileFilter(f.child());
+    }
+    if (predicate instanceof Or) {
+      Or or = (Or) predicate;
+      Optional<String> left = compilePredicate(or.left());
+      Optional<String> right = compilePredicate(or.right());
+      if (left.isEmpty()) return right;
+      if (right.isEmpty()) return left;
+      return Optional.of(String.format("(%s) OR (%s)", left.get(), right.get()));
+    }
+    if (predicate instanceof Not) {
+      Not not = (Not) predicate;
+      Optional<String> child = compilePredicate(not.child());
       if (child.isEmpty()) return child;
       return Optional.of(String.format("NOT (%s)", child.get()));
-    } else if (filter instanceof In) {
-      In in = (In) filter;
-      String values =
-          Arrays.stream(in.values())
-              .map(FilterPushDown::compileValue)
-              .collect(Collectors.joining(","));
-      return Optional.of(String.format("%s IN (%s)", in.attribute(), values));
     }
 
-    return Optional.empty();
+    Expression[] children = predicate.children();
+    switch (predicate.name()) {
+      case "=":
+        return binaryOp(children, "==");
+      case "<":
+        return binaryOp(children, "<");
+      case "<=":
+        return binaryOp(children, "<=");
+      case ">":
+        return binaryOp(children, ">");
+      case ">=":
+        return binaryOp(children, ">=");
+      case "IS_NULL":
+        return Optional.of(String.format("%s IS NULL", columnName(children[0])));
+      case "IS_NOT_NULL":
+        return Optional.of(String.format("%s IS NOT NULL", columnName(children[0])));
+      case "IN":
+        String values =
+            java.util.Arrays.stream(children)
+                .skip(1)
+                .map(c -> compileLiteral(((Literal<?>) c)))
+                .collect(Collectors.joining(","));
+        return Optional.of(String.format("%s IN (%s)", columnName(children[0]), values));
+      default:
+        return Optional.empty();
+    }
   }
 
-  private static String compileValue(Object value) {
+  private static Optional<String> binaryOp(Expression[] children, String op) {
+    if (children.length != 2) {
+      return Optional.empty();
+    }
+    return Optional.of(
+        columnName(children[0]) + " " + op + " " + compileLiteral((Literal<?>) children[1]));
+  }
+
+  private static String columnName(Expression expr) {
+    return String.join(".", ((NamedReference) expr).fieldNames());
+  }
+
+  private static String compileLiteral(Literal<?> literal) {
+    Object value = literal.value();
     if (value == null) {
       return "NULL";
-    } else if (value instanceof Date) {
+    }
+    if (literal.dataType() == DataTypes.DateType && value instanceof Integer) {
+      return "date '" + java.time.LocalDate.ofEpochDay((Integer) value) + "'";
+    }
+    if (literal.dataType() == DataTypes.TimestampType && value instanceof Long) {
+      long micros = (Long) value;
+      java.time.Instant instant =
+          java.time.Instant.ofEpochSecond(micros / 1_000_000, (micros % 1_000_000) * 1_000);
+      return "timestamp '" + Timestamp.from(instant) + "'";
+    }
+    if (value instanceof Date) {
       return "date '" + value.toString().replace("'", "''") + "'";
-    } else if (value instanceof Timestamp) {
+    }
+    if (value instanceof Timestamp) {
       return "timestamp '" + value.toString().replace("'", "''") + "'";
-    } else if (value instanceof String) {
+    }
+    if (value instanceof org.apache.spark.unsafe.types.UTF8String) {
+      return "'" + value.toString().replace("'", "''") + "'";
+    }
+    if (value instanceof String) {
       return "'" + ((String) value).replace("'", "''") + "'";
-    } else if (value instanceof BigDecimal) {
+    }
+    if (value instanceof BigDecimal) {
       BigDecimal bd = (BigDecimal) value;
       int scale = bd.scale();
-      // Java returns precision=1 for zero regardless of scale (e.g. 0.00 → precision=1, scale=2).
-      // Arrow requires precision >= scale, so clamp precision up if needed.
       int precision = Math.max(bd.precision(), scale);
       return "CAST(" + bd.toPlainString() + " AS DECIMAL(" + precision + ", " + scale + "))";
-    } else if (value instanceof Object[]) {
-      Object[] array = (Object[]) value;
-      StringBuilder sb = new StringBuilder();
-      for (Object obj : array) {
-        if (sb.length() > 0) {
-          sb.append(", ");
-        }
-        sb.append(compileValue(obj));
-      }
-      return sb.toString();
-    } else {
-      return value.toString();
     }
+    return value.toString();
   }
 }

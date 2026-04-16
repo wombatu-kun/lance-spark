@@ -17,18 +17,13 @@ import org.lance.index.scalar.ZoneStats;
 
 import org.apache.spark.sql.catalyst.InternalRow;
 import org.apache.spark.sql.catalyst.expressions.GenericInternalRow;
-import org.apache.spark.sql.sources.And;
-import org.apache.spark.sql.sources.EqualTo;
-import org.apache.spark.sql.sources.Filter;
-import org.apache.spark.sql.sources.GreaterThan;
-import org.apache.spark.sql.sources.GreaterThanOrEqual;
-import org.apache.spark.sql.sources.In;
-import org.apache.spark.sql.sources.IsNotNull;
-import org.apache.spark.sql.sources.IsNull;
-import org.apache.spark.sql.sources.LessThan;
-import org.apache.spark.sql.sources.LessThanOrEqual;
-import org.apache.spark.sql.sources.Not;
-import org.apache.spark.sql.sources.Or;
+import org.apache.spark.sql.connector.expressions.Expression;
+import org.apache.spark.sql.connector.expressions.Literal;
+import org.apache.spark.sql.connector.expressions.NamedReference;
+import org.apache.spark.sql.connector.expressions.filter.And;
+import org.apache.spark.sql.connector.expressions.filter.Not;
+import org.apache.spark.sql.connector.expressions.filter.Or;
+import org.apache.spark.sql.connector.expressions.filter.Predicate;
 import org.apache.spark.unsafe.types.UTF8String;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,19 +38,20 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * Analyzes pushed Spark filters against zonemap index statistics to determine which fragments can
- * be pruned.
+ * Analyzes pushed Spark predicates against zonemap index statistics to determine which fragments
+ * can be pruned.
  *
  * <p>This is analogous to partition pruning in traditional data sources: if all zones within a
- * fragment provably cannot match a filter predicate, that fragment is eliminated from the scan —
- * avoiding fragment opens, scan setup, and task scheduling.
+ * fragment provably cannot match a predicate, that fragment is eliminated from the scan — avoiding
+ * fragment opens, scan setup, and task scheduling.
  *
  * <p>Zonemap pruning is inexact (conservative): it may include fragments that ultimately contain no
  * matching rows, but it will never exclude fragments that do contain matching rows.
  *
- * <p>Multiple filters are treated as conjuncts (implicit AND); their fragment sets are intersected.
- * For each column that has both a pushed filter and zonemap stats, we evaluate which fragments
- * could possibly match. Multiple columns produce independent fragment sets that are intersected.
+ * <p>Multiple predicates are treated as conjuncts (implicit AND); their fragment sets are
+ * intersected. For each column that has both a pushed predicate and zonemap stats, we evaluate
+ * which fragments could possibly match. Multiple columns produce independent fragment sets that are
+ * intersected.
  */
 public final class ZonemapFragmentPruner {
 
@@ -66,26 +62,24 @@ public final class ZonemapFragmentPruner {
   /**
    * Prune fragments using zonemap statistics.
    *
-   * @param pushedFilters the filters pushed down by Spark
+   * @param pushedPredicates the V2 predicates pushed down by Spark
    * @param zonemapStatsByColumn map from column name to its zonemap zone stats
    * @return present with the set of fragment IDs that might match; empty if no pruning can be
    *     derived
    */
   public static Optional<Set<Integer>> pruneFragments(
-      Filter[] pushedFilters, Map<String, List<ZoneStats>> zonemapStatsByColumn) {
+      Predicate[] pushedPredicates, Map<String, List<ZoneStats>> zonemapStatsByColumn) {
 
-    if (pushedFilters == null
-        || pushedFilters.length == 0
+    if (pushedPredicates == null
+        || pushedPredicates.length == 0
         || zonemapStatsByColumn == null
         || zonemapStatsByColumn.isEmpty()) {
       return Optional.empty();
     }
 
-    // Multiple top-level filters are implicitly ANDed by Spark.
-    // We intersect the fragment sets from each filter that provides one.
     Set<Integer> result = null;
-    for (Filter filter : pushedFilters) {
-      Optional<Set<Integer>> fragmentIds = analyzeFilter(filter, zonemapStatsByColumn);
+    for (Predicate predicate : pushedPredicates) {
+      Optional<Set<Integer>> fragmentIds = analyzePredicate(predicate, zonemapStatsByColumn);
       if (fragmentIds.isPresent()) {
         if (result == null) {
           result = new HashSet<>(fragmentIds.get());
@@ -103,68 +97,59 @@ public final class ZonemapFragmentPruner {
   }
 
   /**
-   * Recursively analyzes a single filter to extract fragment IDs from zonemap constraints.
+   * Recursively analyzes a single predicate to extract fragment IDs from zonemap constraints.
    *
    * <p>CONTRACT: when present, the returned Set is always a fresh mutable {@link HashSet} that is
    * not aliased by any other reference. Callers may freely mutate it.
    */
-  private static Optional<Set<Integer>> analyzeFilter(
-      Filter filter, Map<String, List<ZoneStats>> statsByColumn) {
+  private static Optional<Set<Integer>> analyzePredicate(
+      Predicate predicate, Map<String, List<ZoneStats>> statsByColumn) {
 
-    if (filter instanceof EqualTo) {
-      return analyzeComparison(
-          ((EqualTo) filter).attribute(),
-          ((EqualTo) filter).value(),
-          statsByColumn,
-          ComparisonType.EQUALS);
-    } else if (filter instanceof LessThan) {
-      return analyzeComparison(
-          ((LessThan) filter).attribute(),
-          ((LessThan) filter).value(),
-          statsByColumn,
-          ComparisonType.LESS_THAN);
-    } else if (filter instanceof LessThanOrEqual) {
-      return analyzeComparison(
-          ((LessThanOrEqual) filter).attribute(),
-          ((LessThanOrEqual) filter).value(),
-          statsByColumn,
-          ComparisonType.LESS_THAN_OR_EQUAL);
-    } else if (filter instanceof GreaterThan) {
-      return analyzeComparison(
-          ((GreaterThan) filter).attribute(),
-          ((GreaterThan) filter).value(),
-          statsByColumn,
-          ComparisonType.GREATER_THAN);
-    } else if (filter instanceof GreaterThanOrEqual) {
-      return analyzeComparison(
-          ((GreaterThanOrEqual) filter).attribute(),
-          ((GreaterThanOrEqual) filter).value(),
-          statsByColumn,
-          ComparisonType.GREATER_THAN_OR_EQUAL);
-    } else if (filter instanceof In) {
-      return analyzeIn(((In) filter).attribute(), ((In) filter).values(), statsByColumn);
-    } else if (filter instanceof IsNull) {
-      return analyzeIsNull(((IsNull) filter).attribute(), statsByColumn);
-    } else if (filter instanceof IsNotNull) {
-      return analyzeIsNotNull(((IsNotNull) filter).attribute(), statsByColumn);
-    } else if (filter instanceof And) {
-      return analyzeAnd((And) filter, statsByColumn);
-    } else if (filter instanceof Or) {
-      return analyzeOr((Or) filter, statsByColumn);
-    } else if (filter instanceof Not) {
-      // Cannot safely prune for NOT filters — any fragment might match the negation.
+    if (predicate instanceof And) {
+      return analyzeAnd((And) predicate, statsByColumn);
+    }
+    if (predicate instanceof Or) {
+      return analyzeOr((Or) predicate, statsByColumn);
+    }
+    if (predicate instanceof Not) {
       return Optional.empty();
     }
 
-    return Optional.empty();
+    Expression[] children = predicate.children();
+    String name = predicate.name();
+    switch (name) {
+      case "=":
+        return analyzeComparison(children, statsByColumn, ComparisonType.EQUALS);
+      case "<":
+        return analyzeComparison(children, statsByColumn, ComparisonType.LESS_THAN);
+      case "<=":
+        return analyzeComparison(children, statsByColumn, ComparisonType.LESS_THAN_OR_EQUAL);
+      case ">":
+        return analyzeComparison(children, statsByColumn, ComparisonType.GREATER_THAN);
+      case ">=":
+        return analyzeComparison(children, statsByColumn, ComparisonType.GREATER_THAN_OR_EQUAL);
+      case "IN":
+        return analyzeIn(children, statsByColumn);
+      case "IS_NULL":
+        return analyzeIsNull(children, statsByColumn);
+      case "IS_NOT_NULL":
+        return analyzeIsNotNull(children, statsByColumn);
+      default:
+        return Optional.empty();
+    }
   }
 
   @SuppressWarnings("unchecked")
   private static Optional<Set<Integer>> analyzeComparison(
-      String column,
-      Object value,
-      Map<String, List<ZoneStats>> statsByColumn,
-      ComparisonType type) {
+      Expression[] children, Map<String, List<ZoneStats>> statsByColumn, ComparisonType type) {
+
+    if (children.length != 2
+        || !(children[0] instanceof NamedReference)
+        || !(children[1] instanceof Literal)) {
+      return Optional.empty();
+    }
+    String column = columnName((NamedReference) children[0]);
+    Object value = normalizeLiteral(((Literal<?>) children[1]).value());
 
     List<ZoneStats> stats = statsByColumn.get(column);
     if (stats == null || value == null) {
@@ -175,7 +160,7 @@ public final class ZonemapFragmentPruner {
     try {
       target = (Comparable<Object>) value;
     } catch (ClassCastException e) {
-      LOG.warn("Cannot cast filter value {} to Comparable for zonemap pruning", value);
+      LOG.warn("Cannot cast predicate value {} to Comparable for zonemap pruning", value);
       return Optional.empty();
     }
 
@@ -205,10 +190,8 @@ public final class ZonemapFragmentPruner {
     try {
       switch (type) {
         case EQUALS:
-          // target ∈ [min, max]
           return target.compareTo(min) >= 0 && target.compareTo(max) <= 0;
         case LESS_THAN:
-          // ∃ row < target  ⟺  zone.min < target
           return min.compareTo(target) < 0;
         case LESS_THAN_OR_EQUAL:
           return min.compareTo(target) <= 0;
@@ -217,10 +200,9 @@ public final class ZonemapFragmentPruner {
         case GREATER_THAN_OR_EQUAL:
           return max.compareTo(target) >= 0;
         default:
-          return true; // conservative
+          return true;
       }
     } catch (ClassCastException e) {
-      // Type mismatch between filter value and zone stats — be conservative
       LOG.warn("Type mismatch in zonemap comparison, skipping pruning for zone", e);
       return true;
     }
@@ -228,8 +210,12 @@ public final class ZonemapFragmentPruner {
 
   @SuppressWarnings("unchecked")
   private static Optional<Set<Integer>> analyzeIn(
-      String column, Object[] values, Map<String, List<ZoneStats>> statsByColumn) {
+      Expression[] children, Map<String, List<ZoneStats>> statsByColumn) {
 
+    if (children.length < 1 || !(children[0] instanceof NamedReference)) {
+      return Optional.empty();
+    }
+    String column = columnName((NamedReference) children[0]);
     List<ZoneStats> stats = statsByColumn.get(column);
     if (stats == null) {
       return Optional.empty();
@@ -237,7 +223,11 @@ public final class ZonemapFragmentPruner {
 
     Set<Integer> matchingFragments = new HashSet<>();
     for (ZoneStats zone : stats) {
-      for (Object value : values) {
+      for (int i = 1; i < children.length; i++) {
+        if (!(children[i] instanceof Literal)) {
+          continue;
+        }
+        Object value = normalizeLiteral(((Literal<?>) children[i]).value());
         if (value == null) {
           if (zone.getNullCount() > 0) {
             matchingFragments.add(zone.getFragmentId());
@@ -251,7 +241,6 @@ public final class ZonemapFragmentPruner {
               break;
             }
           } catch (ClassCastException e) {
-            // Non-comparable value, conservatively include
             matchingFragments.add(zone.getFragmentId());
             break;
           }
@@ -263,8 +252,12 @@ public final class ZonemapFragmentPruner {
   }
 
   private static Optional<Set<Integer>> analyzeIsNull(
-      String column, Map<String, List<ZoneStats>> statsByColumn) {
+      Expression[] children, Map<String, List<ZoneStats>> statsByColumn) {
 
+    if (children.length != 1 || !(children[0] instanceof NamedReference)) {
+      return Optional.empty();
+    }
+    String column = columnName((NamedReference) children[0]);
     List<ZoneStats> stats = statsByColumn.get(column);
     if (stats == null) {
       return Optional.empty();
@@ -281,8 +274,12 @@ public final class ZonemapFragmentPruner {
   }
 
   private static Optional<Set<Integer>> analyzeIsNotNull(
-      String column, Map<String, List<ZoneStats>> statsByColumn) {
+      Expression[] children, Map<String, List<ZoneStats>> statsByColumn) {
 
+    if (children.length != 1 || !(children[0] instanceof NamedReference)) {
+      return Optional.empty();
+    }
+    String column = columnName((NamedReference) children[0]);
     List<ZoneStats> stats = statsByColumn.get(column);
     if (stats == null) {
       return Optional.empty();
@@ -291,9 +288,7 @@ public final class ZonemapFragmentPruner {
     Set<Integer> matchingFragments = new HashSet<>();
     for (ZoneStats zone : stats) {
       // Zone has non-null rows if zoneLength exceeds nullCount.
-      // zoneLength is the row offset span (may include gaps from deletions),
-      // so this is conservative: we include a zone even if only the offset range
-      // implies there might be non-null values.
+      // Conservative: zoneLength may include gaps from deletions.
       if (zone.getNullCount() < zone.getZoneLength()) {
         matchingFragments.add(zone.getFragmentId());
       }
@@ -303,35 +298,48 @@ public final class ZonemapFragmentPruner {
   }
 
   private static Optional<Set<Integer>> analyzeAnd(
-      And filter, Map<String, List<ZoneStats>> statsByColumn) {
-    Optional<Set<Integer>> left = analyzeFilter(filter.left(), statsByColumn);
-    Optional<Set<Integer>> right = analyzeFilter(filter.right(), statsByColumn);
+      And predicate, Map<String, List<ZoneStats>> statsByColumn) {
+    Optional<Set<Integer>> left = analyzePredicate(predicate.left(), statsByColumn);
+    Optional<Set<Integer>> right = analyzePredicate(predicate.right(), statsByColumn);
 
     if (left.isPresent() && right.isPresent()) {
-      // Intersect both sides
       Set<Integer> intersection = new HashSet<>(left.get());
       intersection.retainAll(right.get());
       return Optional.of(intersection);
     }
-    // Only one side constrains — return that side
     if (left.isPresent()) return left;
     if (right.isPresent()) return right;
     return Optional.empty();
   }
 
   private static Optional<Set<Integer>> analyzeOr(
-      Or filter, Map<String, List<ZoneStats>> statsByColumn) {
-    Optional<Set<Integer>> left = analyzeFilter(filter.left(), statsByColumn);
-    Optional<Set<Integer>> right = analyzeFilter(filter.right(), statsByColumn);
+      Or predicate, Map<String, List<ZoneStats>> statsByColumn) {
+    Optional<Set<Integer>> left = analyzePredicate(predicate.left(), statsByColumn);
+    Optional<Set<Integer>> right = analyzePredicate(predicate.right(), statsByColumn);
 
-    // For OR, both sides must constrain to allow pruning.
-    // If either side is unconstrained, any fragment could match.
     if (left.isPresent() && right.isPresent()) {
       Set<Integer> union = new HashSet<>(left.get());
       union.addAll(right.get());
       return Optional.of(union);
     }
     return Optional.empty();
+  }
+
+  private static String columnName(NamedReference ref) {
+    String[] names = ref.fieldNames();
+    return names.length == 1 ? names[0] : String.join(".", names);
+  }
+
+  /**
+   * V2 {@link Literal} exposes values in Spark's internal representation ({@code UTF8String} for
+   * strings). Zone stats from lance-core store String values — normalize here so {@code compareTo}
+   * against min/max works.
+   */
+  private static Object normalizeLiteral(Object value) {
+    if (value instanceof UTF8String) {
+      return value.toString();
+    }
+    return value;
   }
 
   private enum ComparisonType {
@@ -382,7 +390,6 @@ public final class ZonemapFragmentPruner {
       if (value instanceof String) {
         return UTF8String.fromString((String) value);
       }
-      // Long, Double, Boolean, Integer are already compatible
       return value;
     }
   }

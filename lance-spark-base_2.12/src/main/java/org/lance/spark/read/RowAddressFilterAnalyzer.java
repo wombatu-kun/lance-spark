@@ -16,12 +16,13 @@ package org.lance.spark.read;
 import org.lance.spark.LanceConstant;
 import org.lance.spark.join.FragmentAwareJoinUtils;
 
-import org.apache.spark.sql.sources.And;
-import org.apache.spark.sql.sources.EqualTo;
-import org.apache.spark.sql.sources.Filter;
-import org.apache.spark.sql.sources.In;
-import org.apache.spark.sql.sources.Not;
-import org.apache.spark.sql.sources.Or;
+import org.apache.spark.sql.connector.expressions.Expression;
+import org.apache.spark.sql.connector.expressions.Literal;
+import org.apache.spark.sql.connector.expressions.NamedReference;
+import org.apache.spark.sql.connector.expressions.filter.And;
+import org.apache.spark.sql.connector.expressions.filter.Not;
+import org.apache.spark.sql.connector.expressions.filter.Or;
+import org.apache.spark.sql.connector.expressions.filter.Predicate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,7 +32,8 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * Analyzes pushed Spark filters to extract target fragment IDs from {@code _rowaddr} constraints.
+ * Analyzes pushed Spark predicates to extract target fragment IDs from {@code _rowaddr}
+ * constraints.
  *
  * <p>Since {@code _rowaddr = (fragment_id << 32) | row_index}, we can extract the fragment ID from
  * any {@code _rowaddr} constant value and prune fragments that cannot match. This provides
@@ -51,26 +53,22 @@ public final class RowAddressFilterAnalyzer {
   private RowAddressFilterAnalyzer() {}
 
   /**
-   * Extracts the set of fragment IDs that could match the given pushed filters based on {@code
-   * _rowaddr} constraints. Multiple filters are treated as conjuncts (implicit AND); their fragment
-   * sets are intersected.
+   * Extracts the set of fragment IDs that could match the given pushed predicates based on {@code
+   * _rowaddr} constraints. Multiple predicates are treated as conjuncts (implicit AND); their
+   * fragment sets are intersected.
    *
-   * @param filters the pushed Spark filters
+   * @param predicates the pushed V2 predicates
    * @return present with the set of matching fragment IDs if pruning is possible; empty if no
    *     pruning can be applied
    */
-  public static Optional<Set<Integer>> extractTargetFragmentIds(Filter[] filters) {
-    if (filters == null || filters.length == 0) {
+  public static Optional<Set<Integer>> extractTargetFragmentIds(Predicate[] predicates) {
+    if (predicates == null || predicates.length == 0) {
       return Optional.empty();
     }
 
-    // Multiple top-level filters are implicitly ANDed by Spark. We intersect the fragment sets
-    // from each filter that provides one. If two top-level _rowaddr constraints target different
-    // fragments (e.g. [EqualTo("_rowaddr", 0L), EqualTo("_rowaddr", 4294967296L)]), the
-    // intersection will be empty, correctly producing zero results.
     Set<Integer> result = null;
-    for (Filter filter : filters) {
-      Optional<Set<Integer>> fragmentIds = analyzeFilter(filter);
+    for (Predicate predicate : predicates) {
+      Optional<Set<Integer>> fragmentIds = analyzePredicate(predicate);
       if (fragmentIds.isPresent()) {
         if (result == null) {
           result = new HashSet<>(fragmentIds.get());
@@ -87,44 +85,47 @@ public final class RowAddressFilterAnalyzer {
   }
 
   /**
-   * Recursively analyzes a single filter to extract fragment IDs from {@code _rowaddr} constraints.
+   * Recursively analyzes a single predicate to extract fragment IDs from {@code _rowaddr}
+   * constraints.
    *
    * <p>CONTRACT: when present, the returned Set is always a fresh mutable {@link HashSet} that is
-   * not aliased by any other reference. Callers (including {@link #extractTargetFragmentIds} and
-   * {@link #analyzeAnd}) may freely mutate it (e.g. via {@code retainAll} or {@code addAll})
-   * without affecting other results.
-   *
-   * @param filter the filter to analyze
-   * @return present with the set of matching fragment IDs; empty if no pruning can be derived
+   * not aliased by any other reference. Callers may freely mutate it (e.g. via {@code retainAll} or
+   * {@code addAll}) without affecting other results.
    */
-  private static Optional<Set<Integer>> analyzeFilter(Filter filter) {
-    if (filter instanceof EqualTo) {
-      return analyzeEqualTo((EqualTo) filter);
-    } else if (filter instanceof In) {
-      return analyzeIn((In) filter);
-    } else if (filter instanceof And) {
-      return analyzeAnd((And) filter);
-    } else if (filter instanceof Or) {
-      return analyzeOr((Or) filter);
-    } else if (filter instanceof Not) {
-      // Cannot safely prune for NOT filters — any fragment might match the negation.
+  private static Optional<Set<Integer>> analyzePredicate(Predicate predicate) {
+    if (predicate instanceof And) {
+      return analyzeAnd((And) predicate);
+    }
+    if (predicate instanceof Or) {
+      return analyzeOr((Or) predicate);
+    }
+    if (predicate instanceof Not) {
+      // Cannot safely prune for NOT predicates — any fragment might match the negation.
       return Optional.empty();
-    } else {
-      // TODO: Range filters (GreaterThan, LessThan, etc.) on _rowaddr could compute the
-      //  range of fragment IDs covered and prune accordingly (e.g. _rowaddr >= X AND
-      //  _rowaddr < Y). We conservatively skip pruning for these types.
-      return Optional.empty();
+    }
+    switch (predicate.name()) {
+      case "=":
+        return analyzeEqualTo(predicate);
+      case "IN":
+        return analyzeIn(predicate);
+      default:
+        // Range predicates on _rowaddr could in principle compute the range of fragment IDs
+        // covered (e.g. _rowaddr >= X AND _rowaddr < Y). Conservatively skipped for now.
+        return Optional.empty();
     }
   }
 
-  private static Optional<Set<Integer>> analyzeEqualTo(EqualTo filter) {
-    // Case-sensitive comparison: Spark resolves column names against the schema before pushing
-    // filters, so filter.attribute() matches the schema's original column name ("_rowaddr").
-    // If a user writes uppercase (e.g. _ROWADDR), Spark normalizes it before pushdown.
-    if (!ROW_ADDR_COLUMN.equals(filter.attribute())) {
+  private static Optional<Set<Integer>> analyzeEqualTo(Predicate predicate) {
+    Expression[] children = predicate.children();
+    if (children.length != 2
+        || !(children[0] instanceof NamedReference)
+        || !(children[1] instanceof Literal)) {
       return Optional.empty();
     }
-    Optional<Long> rowAddr = toLong(filter.value());
+    if (!ROW_ADDR_COLUMN.equals(columnName((NamedReference) children[0]))) {
+      return Optional.empty();
+    }
+    Optional<Long> rowAddr = toLong(((Literal<?>) children[1]).value());
     if (!rowAddr.isPresent()) {
       return Optional.empty();
     }
@@ -134,19 +135,24 @@ public final class RowAddressFilterAnalyzer {
     return Optional.of(result);
   }
 
-  private static Optional<Set<Integer>> analyzeIn(In filter) {
-    if (!ROW_ADDR_COLUMN.equals(filter.attribute())) {
+  private static Optional<Set<Integer>> analyzeIn(Predicate predicate) {
+    Expression[] children = predicate.children();
+    if (children.length == 0 || !(children[0] instanceof NamedReference)) {
+      return Optional.empty();
+    }
+    if (!ROW_ADDR_COLUMN.equals(columnName((NamedReference) children[0]))) {
       return Optional.empty();
     }
     Set<Integer> fragmentIds = new HashSet<>();
-    // An empty values array yields Optional.of(emptySet), meaning zero fragments can match —
-    // correct because IN([]) is unsatisfiable. This differs from Optional.empty() which means
-    // "no pruning info available, pass all fragments through". Spark is unlikely to push
-    // IN([]), but we handle it defensively.
-    for (Object value : filter.values()) {
-      Optional<Long> rowAddr = toLong(value);
+    // Empty values list → Optional.of(emptySet) means "no fragment can match" (IN([]) is
+    // unsatisfiable). Optional.empty() means "no pruning info available". Spark is unlikely
+    // to push IN([]), but we handle it defensively.
+    for (int i = 1; i < children.length; i++) {
+      if (!(children[i] instanceof Literal)) {
+        return Optional.empty();
+      }
+      Optional<Long> rowAddr = toLong(((Literal<?>) children[i]).value());
       if (!rowAddr.isPresent()) {
-        // Non-numeric value in _rowaddr IN list — unexpected for a bigint column, skip pruning
         return Optional.empty();
       }
       fragmentIds.add(FragmentAwareJoinUtils.extractFragmentId(rowAddr.get()));
@@ -154,27 +160,15 @@ public final class RowAddressFilterAnalyzer {
     return Optional.of(fragmentIds);
   }
 
-  private static Optional<Set<Integer>> analyzeAnd(And filter) {
-    Optional<Set<Integer>> left = analyzeFilter(filter.left());
-    Optional<Set<Integer>> right = analyzeFilter(filter.right());
+  private static Optional<Set<Integer>> analyzeAnd(And predicate) {
+    Optional<Set<Integer>> left = analyzePredicate(predicate.left());
+    Optional<Set<Integer>> right = analyzePredicate(predicate.right());
 
     if (left.isPresent() && right.isPresent()) {
-      // Intersect both sides (new HashSet — safe from aliasing). If the result is empty
-      // (e.g. _rowaddr = 0 AND _rowaddr = 1<<32), that's intentional — no fragment can satisfy
-      // contradictory constraints, yielding an empty scan with zero rows.
       Set<Integer> intersection = new HashSet<>(left.get());
       intersection.retainAll(right.get());
       return Optional.of(intersection);
     }
-    // Only one side constrains _rowaddr — return that side's set directly.
-    // This is safe because the non-_rowaddr side may reduce rows further within those
-    // fragments, but cannot expand to other fragments (AND can only narrow).
-    // This includes cases like NOT(condition) AND _rowaddr = 0: the Not returns empty()
-    // (no pruning info), so the _rowaddr side's constraint is used — which is correct
-    // because in an AND, the Not side can only further restrict rows within the fragments
-    // already selected by the _rowaddr constraint; it cannot cause matches in additional
-    // fragments.
-    // No copy needed: the CONTRACT on analyzeFilter guarantees a fresh mutable HashSet.
     if (left.isPresent()) {
       return left;
     }
@@ -184,12 +178,12 @@ public final class RowAddressFilterAnalyzer {
     return Optional.empty();
   }
 
-  private static Optional<Set<Integer>> analyzeOr(Or filter) {
-    Optional<Set<Integer>> left = analyzeFilter(filter.left());
-    Optional<Set<Integer>> right = analyzeFilter(filter.right());
+  private static Optional<Set<Integer>> analyzeOr(Or predicate) {
+    Optional<Set<Integer>> left = analyzePredicate(predicate.left());
+    Optional<Set<Integer>> right = analyzePredicate(predicate.right());
 
-    // For OR, both sides must constrain _rowaddr to allow pruning.
-    // If either side is unconstrained, any fragment could match.
+    // For OR, both sides must constrain _rowaddr to allow pruning — otherwise any fragment
+    // could match via the unconstrained side.
     if (left.isPresent() && right.isPresent()) {
       Set<Integer> union = new HashSet<>(left.get());
       union.addAll(right.get());
@@ -198,12 +192,16 @@ public final class RowAddressFilterAnalyzer {
     return Optional.empty();
   }
 
+  private static String columnName(NamedReference ref) {
+    String[] names = ref.fieldNames();
+    return names.length == 1 ? names[0] : String.join(".", names);
+  }
+
   /**
-   * Safely converts a filter value to long. Only accepts integral types (Long, Integer, Short,
-   * Byte) to avoid silent truncation of floating-point values. Returns empty for any other type
-   * (Float, Double, BigDecimal, BigInteger, String, etc.), falling back to no-pruning rather than
-   * crashing the query. BigInteger values that fit in a long are also rejected for simplicity —
-   * Spark does not push BigInteger filter values for bigint columns.
+   * Safely converts a predicate literal value to long. Only accepts integral types (Long, Integer,
+   * Short, Byte) to avoid silent truncation of floating-point values. Returns empty for any other
+   * type (Float, Double, BigDecimal, BigInteger, String, etc.), falling back to no-pruning rather
+   * than crashing the query.
    */
   private static Optional<Long> toLong(Object value) {
     if (value instanceof Long) {
@@ -215,8 +213,6 @@ public final class RowAddressFilterAnalyzer {
     } else if (value instanceof Byte) {
       return Optional.of(((Byte) value).longValue());
     }
-    // All other types (Float, Double, BigDecimal, BigInteger, String, etc.) → no pruning.
-    // We prefer false negatives (no pruning) over incorrect pruning from truncation.
     LOG.warn(
         "Unsupported _rowaddr value type for fragment pruning: {}",
         value != null ? value.getClass().getSimpleName() : "null");

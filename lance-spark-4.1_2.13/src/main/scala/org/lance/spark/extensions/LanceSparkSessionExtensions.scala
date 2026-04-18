@@ -17,6 +17,7 @@ import org.apache.spark.sql.SparkSessionExtensions
 import org.apache.spark.sql.catalyst.optimizer.LanceFragmentAwareJoinRule
 import org.apache.spark.sql.catalyst.parser.extensions.LanceSparkSqlExtensionsParser
 import org.apache.spark.sql.execution.datasources.v2.LanceDataSourceV2Strategy
+import org.lance.spark.read.LanceVectorSearchTableFunction
 
 class LanceSparkSessionExtensions extends (SparkSessionExtensions => Unit) {
 
@@ -28,5 +29,12 @@ class LanceSparkSessionExtensions extends (SparkSessionExtensions => Unit) {
     extensions.injectOptimizerRule(_ => LanceFragmentAwareJoinRule())
 
     extensions.injectPlannerStrategy(LanceDataSourceV2Strategy(_))
+
+    // lance_vector_search(table, column, query, k, ...) table-valued function
+    extensions.injectTableFunction(
+      (
+        LanceVectorSearchTableFunction.IDENTIFIER,
+        LanceVectorSearchTableFunction.INFO,
+        LanceVectorSearchTableFunction.BUILDER))
   }
 }

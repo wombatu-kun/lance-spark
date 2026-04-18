@@ -23,9 +23,11 @@ import org.lance.spark.LanceRuntime;
 import org.lance.spark.LanceSparkReadOptions;
 import org.lance.spark.read.FtsQuerySpec;
 import org.lance.spark.read.LanceInputPartition;
+import org.lance.spark.read.LanceMetadataColumns;
 import org.lance.spark.utils.Utils;
 
 import org.apache.arrow.vector.ipc.ArrowReader;
+import org.apache.spark.sql.connector.catalog.MetadataColumn;
 import org.apache.spark.sql.types.StructField;
 import org.apache.spark.sql.types.StructType;
 
@@ -189,9 +191,8 @@ public class LanceFragmentScanner implements AutoCloseable {
 
   /**
    * Builds the projection column list for the scanner. Regular data columns come first, followed by
-   * special metadata columns in the order matching {@link
-   * org.lance.spark.LanceDataset#METADATA_COLUMNS}. All special columns (_rowid, _rowaddr, version
-   * columns) go through scanner.project() for consistent output ordering.
+   * special metadata columns in the order declared in {@link LanceMetadataColumns#ALL} — that
+   * ordering must match the Rust scanner's output so Spark's batch layout lines up.
    */
   private static List<String> getColumnNames(StructType schema) {
     // Collect all field names in the schema for quick lookup
@@ -206,27 +207,16 @@ public class LanceFragmentScanner implements AutoCloseable {
             .map(StructField::name)
             .filter(
                 name ->
-                    !name.equals(LanceConstant.FRAGMENT_ID)
-                        && !name.equals(LanceConstant.ROW_ID)
-                        && !name.equals(LanceConstant.ROW_ADDRESS)
-                        && !name.equals(LanceConstant.ROW_CREATED_AT_VERSION)
-                        && !name.equals(LanceConstant.ROW_LAST_UPDATED_AT_VERSION)
+                    !LanceMetadataColumns.allNames().contains(name)
                         && !name.endsWith(LanceConstant.BLOB_POSITION_SUFFIX)
                         && !name.endsWith(LanceConstant.BLOB_SIZE_SUFFIX))
             .collect(Collectors.toList());
 
-    // Append special columns in METADATA_COLUMNS order (must match Rust scanner output order)
-    if (schemaFields.contains(LanceConstant.ROW_ID)) {
-      columns.add(LanceConstant.ROW_ID);
-    }
-    if (schemaFields.contains(LanceConstant.ROW_ADDRESS)) {
-      columns.add(LanceConstant.ROW_ADDRESS);
-    }
-    if (schemaFields.contains(LanceConstant.ROW_LAST_UPDATED_AT_VERSION)) {
-      columns.add(LanceConstant.ROW_LAST_UPDATED_AT_VERSION);
-    }
-    if (schemaFields.contains(LanceConstant.ROW_CREATED_AT_VERSION)) {
-      columns.add(LanceConstant.ROW_CREATED_AT_VERSION);
+    // Append scanner-projectable metadata columns in registry order (matches Rust scanner output).
+    for (MetadataColumn col : LanceMetadataColumns.PROJECTABLE) {
+      if (schemaFields.contains(col.name())) {
+        columns.add(col.name());
+      }
     }
 
     return columns;

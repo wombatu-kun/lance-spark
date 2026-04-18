@@ -15,7 +15,7 @@ package org.lance.spark.write;
 
 import org.lance.Dataset;
 import org.lance.Fragment;
-import org.lance.spark.LanceDataset;
+import org.lance.spark.LanceConstant;
 import org.lance.spark.LanceRuntime;
 import org.lance.spark.LanceSparkWriteOptions;
 import org.lance.spark.utils.Utils;
@@ -78,7 +78,7 @@ public abstract class AbstractBackfillWriter implements DataWriter<InternalRow> 
       List<String> tableId) {
     this.writeOptions = writeOptions;
     this.schema = schema;
-    this.fragmentIdField = schema.fieldIndex(LanceDataset.FRAGMENT_ID_COLUMN.name());
+    this.fragmentIdField = schema.fieldIndex(LanceConstant.FRAGMENT_ID);
     this.initialStorageOptions = initialStorageOptions;
     this.namespaceImpl = namespaceImpl;
     this.namespaceProperties = namespaceProperties;
@@ -86,8 +86,7 @@ public abstract class AbstractBackfillWriter implements DataWriter<InternalRow> 
 
     StructType ws = new StructType();
     for (org.apache.spark.sql.types.StructField f : schema.fields()) {
-      if (targetColumns.contains(f.name())
-          || f.name().equals(LanceDataset.ROW_ADDRESS_COLUMN.name())) {
+      if (targetColumns.contains(f.name()) || f.name().equals(LanceConstant.ROW_ADDRESS)) {
         ws = ws.add(f);
       }
     }

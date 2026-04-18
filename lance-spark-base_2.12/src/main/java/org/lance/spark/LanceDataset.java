@@ -13,6 +13,7 @@
  */
 package org.lance.spark;
 
+import org.lance.spark.read.LanceMetadataColumns;
 import org.lance.spark.read.LanceScanBuilder;
 import org.lance.spark.utils.BlobUtils;
 import org.lance.spark.write.AddColumnsBackfillWrite;
@@ -56,90 +57,6 @@ public class LanceDataset
   private static final Set<TableCapability> CAPABILITIES =
       ImmutableSet.of(
           TableCapability.BATCH_READ, TableCapability.BATCH_WRITE, TableCapability.TRUNCATE);
-
-  public static final MetadataColumn FRAGMENT_ID_COLUMN =
-      new MetadataColumn() {
-        @Override
-        public String name() {
-          return LanceConstant.FRAGMENT_ID;
-        }
-
-        @Override
-        public DataType dataType() {
-          return DataTypes.IntegerType;
-        }
-
-        @Override
-        public boolean isNullable() {
-          return false;
-        }
-      };
-
-  public static final MetadataColumn ROW_ID_COLUMN =
-      new MetadataColumn() {
-        @Override
-        public String name() {
-          return LanceConstant.ROW_ID;
-        }
-
-        @Override
-        public DataType dataType() {
-          return DataTypes.LongType;
-        }
-      };
-
-  public static final MetadataColumn ROW_ADDRESS_COLUMN =
-      new MetadataColumn() {
-        @Override
-        public String name() {
-          return LanceConstant.ROW_ADDRESS;
-        }
-
-        @Override
-        public DataType dataType() {
-          return DataTypes.LongType;
-        }
-
-        @Override
-        public boolean isNullable() {
-          return false;
-        }
-      };
-
-  public static final MetadataColumn ROW_LAST_UPDATED_AT_VERSION_COLUMN =
-      new MetadataColumn() {
-        @Override
-        public String name() {
-          return LanceConstant.ROW_LAST_UPDATED_AT_VERSION;
-        }
-
-        @Override
-        public DataType dataType() {
-          return DataTypes.LongType;
-        }
-      };
-
-  public static final MetadataColumn ROW_CREATED_AT_VERSION_COLUMN =
-      new MetadataColumn() {
-        @Override
-        public String name() {
-          return LanceConstant.ROW_CREATED_AT_VERSION;
-        }
-
-        @Override
-        public DataType dataType() {
-          return DataTypes.LongType;
-        }
-      };
-
-  public static final MetadataColumn[] METADATA_COLUMNS =
-      new MetadataColumn[] {
-        ROW_ID_COLUMN,
-        ROW_ADDRESS_COLUMN,
-        ROW_LAST_UPDATED_AT_VERSION_COLUMN,
-        ROW_CREATED_AT_VERSION_COLUMN,
-        FRAGMENT_ID_COLUMN
-      };
 
   protected final LanceSparkReadOptions readOptions;
   protected final StructType sparkSchema;
@@ -393,7 +310,7 @@ public class LanceDataset
   public MetadataColumn[] metadataColumns() {
     // Start with the base metadata columns
     List<MetadataColumn> columns = new ArrayList<>();
-    for (MetadataColumn col : METADATA_COLUMNS) {
+    for (MetadataColumn col : LanceMetadataColumns.ALL) {
       columns.add(col);
     }
 

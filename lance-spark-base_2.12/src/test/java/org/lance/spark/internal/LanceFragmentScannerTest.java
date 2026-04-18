@@ -109,7 +109,7 @@ public class LanceFragmentScannerTest {
 
   @Test
   public void testGetColumnNamesWithAllMetadataColumns() throws Exception {
-    // Test with all metadata columns in the order defined in LanceDataset.METADATA_COLUMNS
+    // Test with all metadata columns in the order defined in LanceMetadataColumns.ALL
     StructType schema =
         new StructType(
             new StructField[] {

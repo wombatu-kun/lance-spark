@@ -83,6 +83,7 @@ public class TestUtils {
               new LanceSplit(Arrays.asList(0, 1)),
               readOptions,
               Optional.empty() /* whereCondition */,
+              Optional.empty() /* ftsQuery */,
               Optional.empty() /* limit */,
               Optional.empty() /* offset */,
               Optional.empty() /* topNSortOrders */,

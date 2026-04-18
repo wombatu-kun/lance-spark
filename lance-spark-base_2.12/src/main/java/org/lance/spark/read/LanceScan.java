@@ -67,6 +67,7 @@ public class LanceScan
   private final StructType schema;
   private final LanceSparkReadOptions readOptions;
   private final Optional<String> whereConditions;
+  private final Optional<FtsQuerySpec> ftsQuery;
   private final Optional<Integer> limit;
   private final Optional<Integer> offset;
   private final Optional<List<ColumnOrdering>> topNSortOrders;
@@ -112,6 +113,7 @@ public class LanceScan
       StructType schema,
       LanceSparkReadOptions readOptions,
       Optional<String> whereConditions,
+      Optional<FtsQuerySpec> ftsQuery,
       Optional<Integer> limit,
       Optional<Integer> offset,
       Optional<List<ColumnOrdering>> topNSortOrders,
@@ -127,6 +129,7 @@ public class LanceScan
     this.schema = schema;
     this.readOptions = readOptions;
     this.whereConditions = whereConditions;
+    this.ftsQuery = ftsQuery;
     this.limit = limit;
     this.offset = offset;
     this.topNSortOrders = topNSortOrders;
@@ -186,6 +189,7 @@ public class LanceScan
                       split,
                       resolvedReadOptions,
                       whereConditions,
+                      ftsQuery,
                       limit,
                       offset,
                       topNSortOrders,
@@ -398,6 +402,7 @@ public class LanceScan
         scala.collection.immutable.Map$.MODULE$.empty();
     scala.collection.immutable.Map<String, String> result = empty;
     result = result.$plus(scala.Tuple2.apply("whereConditions", whereConditions.toString()));
+    result = result.$plus(scala.Tuple2.apply("ftsQuery", ftsQuery.toString()));
     result = result.$plus(scala.Tuple2.apply("limit", limit.toString()));
     result = result.$plus(scala.Tuple2.apply("offset", offset.toString()));
     result = result.$plus(scala.Tuple2.apply("topNSortOrders", topNSortOrders.toString()));
@@ -428,6 +433,7 @@ public class LanceScan
     return Objects.equals(schema, that.schema)
         && Objects.equals(readOptions, that.readOptions)
         && Objects.equals(whereConditions, that.whereConditions)
+        && Objects.equals(ftsQuery, that.ftsQuery)
         && Objects.equals(limit, that.limit)
         && Objects.equals(offset, that.offset)
         && Objects.equals(topNSortOrders.toString(), that.topNSortOrders.toString())
@@ -439,7 +445,13 @@ public class LanceScan
   public int hashCode() {
     int result =
         Objects.hash(
-            schema, readOptions, whereConditions, limit, offset, topNSortOrders.toString());
+            schema,
+            readOptions,
+            whereConditions,
+            ftsQuery,
+            limit,
+            offset,
+            topNSortOrders.toString());
     result = 31 * result + Arrays.hashCode(sortedByHash(pushedFilters));
     result = 31 * result + aggregationHashCode(pushedAggregation);
     return result;

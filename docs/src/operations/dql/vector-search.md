@@ -181,5 +181,9 @@ A common starting recipe for IVF-PQ on a few million rows:
 - **Query vector is a driver-side literal**: Spark evaluates the `query` expression on the driver
   when planning the scan. Non-foldable expressions (e.g. a column reference) are rejected.
 - **Named arguments**: require Spark 3.5+. On Spark 3.4 pass all arguments positionally.
-- **`_distance` column**: not yet exposed in the TVF's output schema — see the roadmap issue for
-  progress.
+- **`_distance` column**: the TVF surfaces the per-row distance as a non-nullable `FLOAT`
+  column named `_distance`. Its units depend on the `metric` argument: `l2` returns squared
+  L2 distance, `cosine` returns `1 − cos(θ)`, `dot` returns negative inner product, and
+  `hamming` returns integer Hamming distance (cast to FLOAT). Filters referencing
+  `_distance` (e.g. `WHERE _distance < 0.5`) are evaluated by Spark after the scan; they are
+  not pushed into the Lance native WHERE.

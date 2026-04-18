@@ -20,6 +20,7 @@ import org.lance.index.IndexDescription;
 import org.lance.index.scalar.ZoneStats;
 import org.lance.ipc.ColumnOrdering;
 import org.lance.schema.LanceField;
+import org.lance.spark.LanceConstant;
 import org.lance.spark.LanceSparkReadOptions;
 import org.lance.spark.utils.Optional;
 import org.lance.spark.utils.Utils;
@@ -237,9 +238,39 @@ public class LanceScanBuilder
     if (!readOptions.isPushDownFilters()) {
       return filters;
     }
-    Filter[][] processFilters = FilterPushDown.processFilters(filters);
+    // _distance is a virtual column auto-appended by the Lance native scanner in vector-search
+    // mode. Lance's SQL WHERE evaluator has no concept of it, so pushing filters that reference
+    // _distance would fail at scan time. Hold such filters back as residuals so Spark applies
+    // them post-scan.
+    List<Filter> pushable = new ArrayList<>(filters.length);
+    List<Filter> residual = new ArrayList<>();
+    for (Filter filter : filters) {
+      if (referencesDistance(filter)) {
+        residual.add(filter);
+      } else {
+        pushable.add(filter);
+      }
+    }
+    Filter[][] processFilters = FilterPushDown.processFilters(pushable.toArray(new Filter[0]));
     pushedFilters = processFilters[0];
-    return processFilters[1];
+    if (residual.isEmpty()) {
+      return processFilters[1];
+    }
+    Filter[] remaining = new Filter[processFilters[1].length + residual.size()];
+    System.arraycopy(processFilters[1], 0, remaining, 0, processFilters[1].length);
+    for (int i = 0; i < residual.size(); i++) {
+      remaining[processFilters[1].length + i] = residual.get(i);
+    }
+    return remaining;
+  }
+
+  private static boolean referencesDistance(Filter filter) {
+    for (String ref : filter.references()) {
+      if (LanceConstant.DISTANCE.equals(ref)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   @Override
@@ -280,19 +311,26 @@ public class LanceScanBuilder
     if (!readOptions.isTopNPushDown()) {
       return false;
     }
-    this.limit = Optional.of(limit);
     List<ColumnOrdering> topNSortOrders = new ArrayList<>();
     for (SortOrder sortOrder : orders) {
-      ColumnOrdering.Builder builder = new ColumnOrdering.Builder();
-      builder.setNullFirst(sortOrder.nullOrdering() == NullOrdering.NULLS_FIRST);
-      builder.setAscending(sortOrder.direction() == SortDirection.ASCENDING);
       if (!(sortOrder.expression() instanceof FieldReference)) {
         return false;
       }
       FieldReference reference = (FieldReference) sortOrder.expression();
-      builder.setColumnName(reference.fieldNames()[0]);
+      String columnName = reference.fieldNames()[0];
+      // _distance is a virtual column auto-appended by the native scanner; it is not a
+      // sortable field in Lance's SQL-level column list. Let Spark apply this sort above
+      // the scan.
+      if (LanceConstant.DISTANCE.equals(columnName)) {
+        return false;
+      }
+      ColumnOrdering.Builder builder = new ColumnOrdering.Builder();
+      builder.setNullFirst(sortOrder.nullOrdering() == NullOrdering.NULLS_FIRST);
+      builder.setAscending(sortOrder.direction() == SortDirection.ASCENDING);
+      builder.setColumnName(columnName);
       topNSortOrders.add(builder.build());
     }
+    this.limit = Optional.of(limit);
     this.topNSortOrders = Optional.of(topNSortOrders);
     return true;
   }

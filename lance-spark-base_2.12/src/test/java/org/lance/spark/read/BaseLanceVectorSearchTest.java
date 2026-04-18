@@ -13,9 +13,18 @@
  */
 package org.lance.spark.read;
 
+import org.lance.Fragment;
+import org.lance.ipc.ColumnOrdering;
+import org.lance.ipc.Query;
+import org.lance.ipc.ScanOptions;
+import org.lance.spark.LanceConstant;
+
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
+import org.apache.spark.sql.types.DataTypes;
+import org.apache.spark.sql.types.StructField;
+import org.apache.spark.sql.types.StructType;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,13 +32,17 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 /**
@@ -53,6 +66,8 @@ public abstract class BaseLanceVectorSearchTest {
 
   @TempDir Path tempDir;
 
+  protected String tableDir;
+
   @BeforeEach
   public void setup() throws IOException {
     Path rootPath = tempDir.resolve(UUID.randomUUID().toString());
@@ -72,6 +87,8 @@ public abstract class BaseLanceVectorSearchTest {
             .getOrCreate();
     this.tableName = "vec_" + UUID.randomUUID().toString().replace("-", "");
     this.fullTable = catalogName + ".default." + this.tableName;
+    this.tableDir =
+        FileSystems.getDefault().getPath(testRoot, this.tableName + ".lance").toString();
   }
 
   @AfterEach
@@ -170,6 +187,207 @@ public abstract class BaseLanceVectorSearchTest {
                             + ", 5)")
                     .collect());
     Assertions.assertNotNull(ex.getMessage());
+  }
+
+  // ─── Tests: _distance virtual column ──────────────────────────────────────
+
+  @Test
+  public void testTvfSchemaSurfacesDistanceColumn() {
+    prepareDataset();
+    StructType schema = tvfSqlAllColumns(10, "l2").schema();
+    StructField distanceField = null;
+    for (StructField f : schema.fields()) {
+      if (LanceConstant.DISTANCE.equals(f.name())) {
+        distanceField = f;
+        break;
+      }
+    }
+    Assertions.assertNotNull(
+        distanceField,
+        "Expected '"
+            + LanceConstant.DISTANCE
+            + "' field in schema, got "
+            + Arrays.toString(schema.fieldNames()));
+    Assertions.assertEquals(DataTypes.FloatType, distanceField.dataType());
+    Assertions.assertFalse(distanceField.nullable(), "_distance should be non-nullable");
+  }
+
+  @Test
+  public void testSelectDistanceReturnsNonNullFloats() {
+    prepareDataset();
+    List<Row> rows =
+        spark
+            .sql(
+                "SELECT id, _distance FROM lance_vector_search('"
+                    + fullTable
+                    + "', 'emb', "
+                    + queryVectorLiteral()
+                    + ", 10, 'l2', 20, 1, 64, false)")
+            .collectAsList();
+    Assertions.assertFalse(rows.isEmpty(), "TVF must return rows");
+    for (Row r : rows) {
+      Assertions.assertFalse(r.isNullAt(1), "_distance must be non-null for row id=" + r.getInt(0));
+      float d = r.getFloat(1);
+      Assertions.assertTrue(
+          Float.isFinite(d) && d >= 0.0f,
+          "_distance must be finite and non-negative (L2), got " + d + " for id=" + r.getInt(0));
+    }
+  }
+
+  @Test
+  public void testOrderByDistanceProducesGlobalTopK() {
+    prepareDataset();
+    int k = 5;
+    List<Row> rows =
+        spark
+            .sql(
+                "SELECT id, _distance FROM lance_vector_search('"
+                    + fullTable
+                    + "', 'emb', "
+                    + queryVectorLiteral()
+                    + ", "
+                    + k
+                    + ", 'l2', 20, 1, 64, false) ORDER BY _distance LIMIT "
+                    + k)
+            .collectAsList();
+    Assertions.assertEquals(k, rows.size(), "Expected " + k + " rows after global top-k");
+    for (int i = 1; i < rows.size(); i++) {
+      float prev = rows.get(i - 1).getFloat(1);
+      float cur = rows.get(i).getFloat(1);
+      Assertions.assertTrue(
+          prev <= cur, "ORDER BY _distance must be ascending; prev=" + prev + " cur=" + cur);
+    }
+    Assertions.assertEquals(
+        plantedRowId(),
+        rows.get(0).getInt(0),
+        "Closest row by _distance should be the planted neighbour");
+  }
+
+  @Test
+  public void testWhereDistanceFilters() {
+    prepareDataset();
+    float threshold = 0.5f;
+    List<Row> rows =
+        spark
+            .sql(
+                "SELECT id, _distance FROM lance_vector_search('"
+                    + fullTable
+                    + "', 'emb', "
+                    + queryVectorLiteral()
+                    + ", 20, 'l2', 20, 1, 64, false) WHERE _distance < "
+                    + threshold)
+            .collectAsList();
+    Assertions.assertFalse(rows.isEmpty(), "At least the planted neighbour must pass threshold");
+    for (Row r : rows) {
+      Assertions.assertTrue(
+          r.getFloat(1) < threshold,
+          "WHERE _distance < " + threshold + " leaked row with d=" + r.getFloat(1));
+    }
+  }
+
+  @Test
+  public void testScalarOnlyProjectionStillWorks() {
+    // Scalar-only projection (no _distance) must not regress with the decorator in place.
+    prepareDataset();
+    Set<Integer> ids = collectIds(runTvfSql(10, "l2"));
+    Assertions.assertTrue(
+        ids.contains(plantedRowId()),
+        "Scalar-only projection must still return planted neighbour, got " + ids);
+  }
+
+  @Test
+  public void testNonNearestReadDoesNotExposeDistance() {
+    // Regression guard: regular reads must not pick up _distance.
+    prepareDataset();
+    Dataset<Row> df = spark.read().format("lance").load(tableDir);
+    Assertions.assertFalse(
+        Arrays.asList(df.schema().fieldNames()).contains(LanceConstant.DISTANCE),
+        "Non-nearest read must not contain _distance; got "
+            + Arrays.toString(df.schema().fieldNames()));
+  }
+
+  /**
+   * Contract test pinning Lance native's current behaviour: attempting to filter on {@code
+   * _distance} at the scanner level raises {@code Column _distance does not exist}. Documents
+   * <em>why</em> {@code LanceScanBuilder#pushFilters} refuses to push filters that reference the
+   * virtual column. If Lance upstream starts accepting {@code _distance} in SQL WHERE clauses this
+   * test will begin to pass without an exception — at which point the guard can be relaxed.
+   */
+  @Test
+  public void testLanceNativeRejectsDistanceInWhereClause() {
+    prepareDataset();
+    runAndAssertDistanceRejected(
+        b -> b.filter(LanceConstant.DISTANCE + " < 0.5"),
+        new Query.Builder()
+            .setColumn("emb")
+            .setKey(queryVector())
+            .setK(5)
+            .setUseIndex(false)
+            .build());
+  }
+
+  /**
+   * Contract test pinning Lance native's current behaviour: attempting to sort by {@code _distance}
+   * at the scanner level raises {@code Column _distance not found}. Same unblock criterion as
+   * {@link #testLanceNativeRejectsDistanceInWhereClause}.
+   */
+  @Test
+  public void testLanceNativeRejectsDistanceInColumnOrderings() {
+    prepareDataset();
+    ColumnOrdering.Builder cob = new ColumnOrdering.Builder();
+    cob.setColumnName(LanceConstant.DISTANCE);
+    cob.setAscending(true);
+    cob.setNullFirst(false);
+    ColumnOrdering ordering = cob.build();
+    runAndAssertDistanceRejected(
+        b -> b.setColumnOrderings(Collections.singletonList(ordering)),
+        new Query.Builder()
+            .setColumn("emb")
+            .setKey(queryVector())
+            .setK(5)
+            .setUseIndex(false)
+            .build());
+  }
+
+  /**
+   * Builds a nearest-scan over fragment 0 with the caller-supplied extra option (filter, ordering,
+   * …), executes it, and asserts that Lance native raises an {@link IllegalArgumentException} whose
+   * message mentions {@code _distance}.
+   */
+  private void runAndAssertDistanceRejected(Consumer<ScanOptions.Builder> extraOption, Query q) {
+    org.lance.Dataset ds = org.lance.Dataset.open().uri(tableDir).build();
+    try {
+      Fragment fragment = ds.getFragments().get(0);
+      ScanOptions.Builder b = new ScanOptions.Builder();
+      b.columns(Collections.singletonList("id"));
+      b.nearest(q);
+      b.prefilter(true);
+      extraOption.accept(b);
+      ScanOptions opts = b.build();
+      IllegalArgumentException ex =
+          Assertions.assertThrows(
+              IllegalArgumentException.class,
+              () -> fragment.newScan(opts).scanBatches().loadNextBatch());
+      Assertions.assertTrue(
+          ex.getMessage().contains(LanceConstant.DISTANCE),
+          "Expected Lance error to mention _distance, got: " + ex.getMessage());
+    } finally {
+      ds.close();
+    }
+  }
+
+  /** Like {@link #runTvfSql} but selects all columns so the schema includes {@code _distance}. */
+  private Dataset<Row> tvfSqlAllColumns(int k, String metric) {
+    return spark.sql(
+        "SELECT * FROM lance_vector_search('"
+            + fullTable
+            + "', 'emb', "
+            + queryVectorLiteral()
+            + ", "
+            + k
+            + ", '"
+            + metric
+            + "', 20, 1, 64, false)");
   }
 
   // ─── Helpers ──────────────────────────────────────────────────────────────

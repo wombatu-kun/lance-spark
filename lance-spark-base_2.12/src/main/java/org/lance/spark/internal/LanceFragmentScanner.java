@@ -194,7 +194,9 @@ public class LanceFragmentScanner implements AutoCloseable {
       schemaFields.add(field.name());
     }
 
-    // Regular data columns (exclude all special/metadata columns)
+    // Regular data columns (exclude all special/metadata columns).
+    // _distance is auto-appended by Lance when nearest(...) is set on the scanner — asking for it
+    // explicitly in .columns(...) would cause the native side to reject it as an unknown column.
     List<String> columns =
         Arrays.stream(schema.fields())
             .map(StructField::name)
@@ -205,6 +207,7 @@ public class LanceFragmentScanner implements AutoCloseable {
                         && !name.equals(LanceConstant.ROW_ADDRESS)
                         && !name.equals(LanceConstant.ROW_CREATED_AT_VERSION)
                         && !name.equals(LanceConstant.ROW_LAST_UPDATED_AT_VERSION)
+                        && !name.equals(LanceConstant.DISTANCE)
                         && !name.endsWith(LanceConstant.BLOB_POSITION_SUFFIX)
                         && !name.endsWith(LanceConstant.BLOB_SIZE_SUFFIX))
             .collect(Collectors.toList());

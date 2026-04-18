@@ -19,10 +19,10 @@ import org.apache.spark.sql.catalyst.expressions.{Expression, ExpressionInfo, Li
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.catalyst.util.ArrayData
 import org.apache.spark.sql.execution.datasources.v2.DataSourceV2Relation
-import org.apache.spark.sql.types.{DoubleType, FloatType, IntegerType, LongType}
+import org.apache.spark.sql.types.{DataTypes, DoubleType, FloatType, IntegerType, LongType, Metadata, StructField}
 import org.apache.spark.unsafe.types.UTF8String
 import org.lance.ipc.Query
-import org.lance.spark.{LanceDataset, LanceDataSource, LanceSparkReadOptions}
+import org.lance.spark.{LanceConstant, LanceDataset, LanceDataSource, LanceSparkReadOptions}
 import org.lance.spark.utils.QueryUtils
 
 import scala.collection.JavaConverters._
@@ -102,7 +102,24 @@ object LanceVectorSearchTableFunction {
     storageOptions.foreach { case (k, v) => reader.option(k, v) }
     reader.option(LanceSparkReadOptions.CONFIG_NEAREST, queryJson)
 
-    reader.load(datasetUri).queryExecution.analyzed
+    val analyzed = reader.load(datasetUri).queryExecution.analyzed
+    // Wrap the underlying LanceDataset in a decorator that surfaces the virtual `_distance`
+    // column in the relation's schema. Done here (not in `LanceDataSource.getTable`) because
+    // `SupportsCatalogOptions` routes `.load()` through `catalog.loadTable(ident)`, which
+    // bypasses `getTable` and never sees the per-read `nearest` option.
+    val distanceField = new StructField(
+      LanceConstant.DISTANCE,
+      DataTypes.FloatType,
+      /* nullable = */ false,
+      Metadata.empty)
+    analyzed.transformUp {
+      case rel: DataSourceV2Relation if rel.table.isInstanceOf[LanceDataset] =>
+        val wrapped = new LanceVirtualColumnsTable(
+          rel.table.asInstanceOf[LanceDataset],
+          java.util.Collections.singletonList(distanceField),
+          "vector_search")
+        DataSourceV2Relation.create(wrapped, rel.catalog, rel.identifier, rel.options)
+    }
   }
 
   // ─── Argument parsing ──────────────────────────────────────────────────────

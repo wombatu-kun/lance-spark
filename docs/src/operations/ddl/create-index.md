@@ -57,6 +57,8 @@ For the `fts` method, the following options are required:
 
 For advanced tokenizer configuration, refer to the [Lance FTS documentation](https://lance.org/format/table/index/scalar/fts/#tokenizers).
 
+To query the index once it's built, see [Full-Text Search](../dql/fts.md).
+
 ## Examples
 
 ### Basic Index Creation

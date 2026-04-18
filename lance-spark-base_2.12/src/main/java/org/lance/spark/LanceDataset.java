@@ -272,13 +272,22 @@ public class LanceDataset
               .fromOptions(mergedOptions)
               .build();
     }
-    return new LanceScanBuilder(
-        sparkSchema,
-        scanOptions,
-        initialStorageOptions,
-        namespaceImpl,
-        namespaceProperties,
-        tableProperties);
+    LanceScanBuilder builder =
+        new LanceScanBuilder(
+            sparkSchema,
+            scanOptions,
+            initialStorageOptions,
+            namespaceImpl,
+            namespaceProperties,
+            tableProperties);
+
+    // Apply FTS spec injected by LanceFtsPushdownRule via scan options.
+    String ftsColumn = caseInsensitiveStringMap.get(LanceConstant.LANCE_FTS_COLUMN_OPT);
+    String ftsQuery = caseInsensitiveStringMap.get(LanceConstant.LANCE_FTS_QUERY_OPT);
+    if (ftsColumn != null && ftsQuery != null) {
+      builder.setFtsQuery(new org.lance.spark.read.FtsQuerySpec(ftsColumn, ftsQuery));
+    }
+    return builder;
   }
 
   @Override

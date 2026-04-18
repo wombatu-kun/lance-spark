@@ -72,6 +72,7 @@ public class LanceScanBuilder
   private Optional<Integer> offset = Optional.empty();
   private Optional<List<ColumnOrdering>> topNSortOrders = Optional.empty();
   private Optional<Aggregation> pushedAggregation = Optional.empty();
+  private Optional<FtsQuerySpec> ftsQuery = Optional.empty();
   private LanceLocalScan localScan = null;
 
   // Lazily opened dataset for reuse during scan building
@@ -105,6 +106,11 @@ public class LanceScanBuilder
     this.namespaceImpl = namespaceImpl;
     this.namespaceProperties = namespaceProperties;
     this.tableProperties = tableProperties != null ? tableProperties : Collections.emptyMap();
+  }
+
+  /** Sets the FTS query extracted by {@code LanceFtsPushdownRule} — applied in {@link #build()}. */
+  public void setFtsQuery(FtsQuerySpec ftsQuery) {
+    this.ftsQuery = Optional.of(ftsQuery);
   }
 
   /**
@@ -213,6 +219,7 @@ public class LanceScanBuilder
         schema,
         readOptions,
         whereCondition,
+        ftsQuery,
         limit,
         offset,
         topNSortOrders,

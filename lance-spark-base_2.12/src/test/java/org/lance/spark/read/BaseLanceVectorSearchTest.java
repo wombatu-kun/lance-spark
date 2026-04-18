@@ -75,7 +75,7 @@ public abstract class BaseLanceVectorSearchTest {
   }
 
   @AfterEach
-  public void tearDown() {
+  public void tearDown() throws IOException {
     if (spark != null) {
       spark.close();
       spark = null;

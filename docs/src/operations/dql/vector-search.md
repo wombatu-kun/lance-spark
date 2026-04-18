@@ -9,7 +9,7 @@ Implemented as a **table-valued function**, so it composes cleanly with `WHERE`,
     [Spark SQL Extensions](../../config.md#spark-sql-extensions) for configuration details.
 
 !!! tip "Also see"
-    - [CREATE VECTOR INDEX](../ddl/create-vector-index.md) — build the index the search uses.
+    - [CREATE INDEX](../ddl/create-index.md) — build the vector (`ivf_*`) index the search uses.
     - [Select](select.md) — general read path.
 
 ## Syntax
@@ -84,7 +84,7 @@ smaller than `k` (or the pre-filter eliminates enough rows).
 
 ### `metric`
 Which distance metric to use. See the metric table in
-[CREATE VECTOR INDEX → Distance Metrics](../ddl/create-vector-index.md#distance-metrics).
+[CREATE INDEX → Distance Metrics](../ddl/create-index.md#distance-metrics).
 If omitted, the metric stored inside the index is used.
 
 ### `nprobes`

@@ -91,6 +91,13 @@ public class LanceFragmentScanner implements AutoCloseable {
       if (inputPartition.getWhereCondition().isPresent()) {
         scanOptions.filter(inputPartition.getWhereCondition().get());
       }
+      boolean scoreRequested =
+          inputPartition.getSchema().getFieldIndex(LanceConstant.FTS_SCORE).nonEmpty();
+      if (scoreRequested && !inputPartition.getFtsQuery().isPresent()) {
+        throw new IllegalArgumentException(
+            LanceConstant.FTS_SCORE
+                + " can only be selected in queries using lance_match(); no FTS predicate found");
+      }
       if (inputPartition.getFtsQuery().isPresent()) {
         FtsQuerySpec spec = inputPartition.getFtsQuery().get();
         scanOptions.fullTextQuery(FullTextQuery.match(spec.query(), spec.column()));

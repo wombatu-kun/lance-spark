@@ -54,6 +54,8 @@ public final class LanceMetadataColumns {
       column(LanceConstant.ROW_CREATED_AT_VERSION, DataTypes.LongType, true);
   public static final MetadataColumn FRAGMENT_ID =
       column(LanceConstant.FRAGMENT_ID, DataTypes.IntegerType, false);
+  public static final MetadataColumn FTS_SCORE =
+      column(LanceConstant.FTS_SCORE, DataTypes.FloatType, true);
 
   /**
    * All metadata columns registered with Spark's analyzer. Used both by {@code
@@ -62,17 +64,22 @@ public final class LanceMetadataColumns {
    */
   public static final MetadataColumn[] ALL =
       new MetadataColumn[] {
-        ROW_ID, ROW_ADDRESS, ROW_LAST_UPDATED_AT_VERSION, ROW_CREATED_AT_VERSION, FRAGMENT_ID
+        ROW_ID,
+        ROW_ADDRESS,
+        ROW_LAST_UPDATED_AT_VERSION,
+        ROW_CREATED_AT_VERSION,
+        FRAGMENT_ID,
+        FTS_SCORE
       };
 
   /**
    * Metadata columns that flow through the native scanner's column-projection list, in the order
-   * the Rust scanner emits them. Excludes columns that are computed per-fragment outside the
-   * scanner (currently {@link #FRAGMENT_ID}, derived from the partition's fragment id).
+   * the Rust scanner emits them. Excludes columns computed per-fragment outside the scanner
+   * (currently {@link #FRAGMENT_ID}, derived from the partition's fragment id).
    */
   public static final MetadataColumn[] PROJECTABLE =
       new MetadataColumn[] {
-        ROW_ID, ROW_ADDRESS, ROW_LAST_UPDATED_AT_VERSION, ROW_CREATED_AT_VERSION
+        ROW_ID, ROW_ADDRESS, ROW_LAST_UPDATED_AT_VERSION, ROW_CREATED_AT_VERSION, FTS_SCORE
       };
 
   private static final Set<String> ALL_NAMES =

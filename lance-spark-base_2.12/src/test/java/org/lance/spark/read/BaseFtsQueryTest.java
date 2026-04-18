@@ -28,7 +28,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.UUID;
 
-/** Base test for FTS query-side functionality — {@code lance_match(col, 'q')}. */
+/** Base test for FTS query-side functionality — {@code lance_match(col, 'q')} + _score column. */
 public abstract class BaseFtsQueryTest {
   protected String catalogName = "lance_test";
   protected String tableName;
@@ -126,5 +126,26 @@ public abstract class BaseFtsQueryTest {
     Assertions.assertEquals(2, rows.size(), "lance_match AND id>2 keeps ids 3 and 5");
     Assertions.assertEquals(3, rows.get(0).getInt(0));
     Assertions.assertEquals(5, rows.get(1).getInt(0));
+  }
+
+  @Test
+  public void testFtsScoreColumn() {
+    prepareIndexedTable();
+
+    // Just assert that _score is materialized with non-null positive BM25 values.
+    // ORDER BY _score in a single query triggers RangePartitioner.sketch in Spark, which
+    // builds a separate sample scan where our optimizer rule may not re-apply — leaving the
+    // scan without the FTS query. Ranking end-to-end is tracked as a follow-up.
+    Dataset<Row> result =
+        spark.sql(
+            String.format(
+                "select id, _score from %s where lance_match(content, 'python programming')",
+                fullTable));
+    List<Row> rows = result.collectAsList();
+    Assertions.assertFalse(rows.isEmpty(), "Expected at least one match");
+    for (Row r : rows) {
+      Assertions.assertFalse(r.isNullAt(1), "_score must not be null when FTS is active");
+      Assertions.assertTrue(r.getFloat(1) > 0.0f, "_score should be a positive BM25 value");
+    }
   }
 }

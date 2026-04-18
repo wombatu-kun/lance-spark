@@ -48,9 +48,11 @@ import java.util.stream.Collectors;
 /**
  * End-to-end coverage for the {@code lance_vector_search} SQL table-valued function.
  *
- * <p>All tests run in brute-force mode ({@code use_index=false}) so this class has no dependency on
- * the vector-index DDL feature — it exercises the TVF mechanics in isolation: argument parsing,
- * positional vs. named call sites, error surface, and {@code WHERE} composition.
+ * <p>Most tests run in brute-force mode ({@code use_index=false}) and exercise the TVF mechanics in
+ * isolation: argument parsing, positional vs. named call sites, error surface, and {@code WHERE}
+ * composition. {@link #testTvfWithIndexAgreesWithBruteForce()} is the one exception — it
+ * additionally requires the vector-index DDL (the {@code ivf_*} method values for {@code ALTER
+ * TABLE … CREATE INDEX}) and verifies the two features compose end-to-end.
  */
 public abstract class BaseLanceVectorSearchTest {
 
@@ -187,6 +189,59 @@ public abstract class BaseLanceVectorSearchTest {
                             + ", 5)")
                     .collect());
     Assertions.assertNotNull(ex.getMessage());
+  }
+
+  // ─── Tests: TVF + vector index integration ────────────────────────────────
+
+  /**
+   * Confirms TVF correctly threads {@code use_index=true} through to the {@code Query.Builder} —
+   * i.e. that the `lance_vector_search` SQL TVF (this PR's feature) and the `ALTER TABLE … CREATE
+   * INDEX … USING ivf_pq` statement (the vector-index PR's feature) compose end-to-end.
+   *
+   * <p>This is the only test in the suite that exercises both halves of the vector-search story
+   * together; the rest of `BaseLanceVectorSearchTest` runs in brute-force mode so the file stays
+   * usable on its own.
+   */
+  @Test
+  public void testTvfWithIndexAgreesWithBruteForce() {
+    prepareDataset();
+    spark.sql(
+        String.format(
+            "ALTER TABLE %s CREATE INDEX idx_bf USING ivf_pq (emb) "
+                + "WITH (num_partitions=4, num_sub_vectors=4, num_bits=8, metric='l2')",
+            fullTable));
+
+    Set<Integer> withIndex = collectIds(runTvfSqlIndexed(/* k= */ 10, "l2"));
+    Set<Integer> bruteForce = collectIds(runTvfSql(/* k= */ 5, "l2"));
+    Assertions.assertTrue(
+        bruteForce.contains(plantedRowId()),
+        "brute-force scan must include the planted neighbour, got " + bruteForce);
+    Assertions.assertTrue(
+        withIndex.contains(plantedRowId()),
+        "indexed scan must include the planted neighbour, got " + withIndex);
+    // Indexed top-10 should subsume a majority of the brute-force top-5 — IVF/PQ is approximate,
+    // so don't demand strict containment.
+    long shared = bruteForce.stream().filter(withIndex::contains).count();
+    Assertions.assertTrue(
+        shared >= (bruteForce.size() + 1) / 2,
+        "Expected indexed top-10 to share a majority of the brute-force top-5; "
+            + "indexed="
+            + withIndex
+            + ", bruteForce="
+            + bruteForce);
+  }
+
+  protected Dataset<Row> runTvfSqlIndexed(int k, String metric) {
+    return spark.sql(
+        "SELECT id FROM lance_vector_search('"
+            + fullTable
+            + "', 'emb', "
+            + queryVectorLiteral()
+            + ", "
+            + k
+            + ", '"
+            + metric
+            + "', 20, 1, 64, true)");
   }
 
   // ─── Tests: _distance virtual column ──────────────────────────────────────

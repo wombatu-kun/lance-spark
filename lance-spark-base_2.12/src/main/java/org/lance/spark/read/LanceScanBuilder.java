@@ -392,8 +392,8 @@ public class LanceScanBuilder
       return false;
     }
     if (funcs.length == 1 && funcs[0] instanceof CountStar) {
-      // Check if we can use metadata-based count (no filters pushed)
-      if (pushedPredicates.length == 0) {
+      // Check if we can use metadata-based count (no filters and no FTS query pushed)
+      if (pushedPredicates.length == 0 && !ftsQuery.isPresent()) {
         Optional<Long> metadataCount = getCountFromMetadata(getOrOpenDataset());
         if (metadataCount.isPresent()) {
           // Create LocalScan with pre-computed count result

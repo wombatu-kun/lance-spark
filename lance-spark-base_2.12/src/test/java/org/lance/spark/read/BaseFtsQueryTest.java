@@ -127,4 +127,16 @@ public abstract class BaseFtsQueryTest {
     Assertions.assertEquals(3, rows.get(0).getInt(0));
     Assertions.assertEquals(5, rows.get(1).getInt(0));
   }
+
+  @Test
+  public void testFtsCountStar() {
+    prepareIndexedTable();
+
+    Dataset<Row> result =
+        spark.sql(
+            String.format(
+                "select count(*) from %s where lance_match(content, 'python')", fullTable));
+    long count = result.collectAsList().get(0).getLong(0);
+    Assertions.assertEquals(3L, count, "count(*) through FTS count-star path");
+  }
 }

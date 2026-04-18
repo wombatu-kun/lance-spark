@@ -30,7 +30,7 @@ import org.lance.{CommitBuilder, Dataset, Transaction}
 import org.lance.index.{Index, IndexOptions, IndexParams, IndexType}
 import org.lance.index.scalar.{BTreeIndexParams, ScalarIndexParams}
 import org.lance.operation.{CreateIndex => AddIndexOperation}
-import org.lance.spark.{BaseLanceNamespaceSparkCatalog, LanceDataset, LanceRuntime, LanceSparkReadOptions}
+import org.lance.spark.{BaseLanceNamespaceSparkCatalog, LanceConstant, LanceDataset, LanceRuntime, LanceSparkReadOptions}
 import org.lance.spark.arrow.LanceArrowWriter
 import org.lance.spark.utils.{CloseableUtil, Utils}
 
@@ -369,7 +369,7 @@ class RangeBasedBTreeIndexJob(
     // Read specific column and _rowid from dataset
     val df = session.table(fullTableName)
     val selectDf =
-      df.select(df.col(columns.head).as(VALUE_COLUMN_NAME), df.col(LanceDataset.ROW_ID_COLUMN.name))
+      df.select(df.col(columns.head).as(VALUE_COLUMN_NAME), df.col(LanceConstant.ROW_ID))
 
     // Repartition the data to numRanges and sort by indexed column
     val rangeDf = selectDf

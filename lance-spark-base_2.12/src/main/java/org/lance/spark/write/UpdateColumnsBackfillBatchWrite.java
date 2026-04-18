@@ -20,7 +20,7 @@ import org.lance.FragmentMetadata;
 import org.lance.Transaction;
 import org.lance.fragment.FragmentUpdateResult;
 import org.lance.operation.Update;
-import org.lance.spark.LanceDataset;
+import org.lance.spark.LanceConstant;
 import org.lance.spark.LanceSparkWriteOptions;
 import org.lance.spark.utils.Utils;
 
@@ -191,10 +191,7 @@ public class UpdateColumnsBackfillBatchWrite implements BatchWrite {
     @Override
     protected void processFragment(Fragment fragment, ArrowArrayStream stream) {
       FragmentUpdateResult result =
-          fragment.updateColumns(
-              stream,
-              LanceDataset.ROW_ADDRESS_COLUMN.name(),
-              LanceDataset.ROW_ADDRESS_COLUMN.name());
+          fragment.updateColumns(stream, LanceConstant.ROW_ADDRESS, LanceConstant.ROW_ADDRESS);
       updatedFragments.add(result.getUpdatedFragment());
       fieldsModified = result.getFieldsModified();
     }

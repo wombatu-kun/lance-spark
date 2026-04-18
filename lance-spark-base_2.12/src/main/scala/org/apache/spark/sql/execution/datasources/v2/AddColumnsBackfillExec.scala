@@ -46,8 +46,8 @@ case class AddColumnsBackfillExec(
     // Add Project if source relation has more fields
     val needFields = query.output.filter(p =>
       columnNames.contains(p.name)
-        || LanceDataset.ROW_ADDRESS_COLUMN.name().equals(p.name)
-        || LanceDataset.FRAGMENT_ID_COLUMN.name().equals(p.name))
+        || LanceConstant.ROW_ADDRESS.equals(p.name)
+        || LanceConstant.FRAGMENT_ID.equals(p.name))
 
     val actualQuery = if (needFields.length != query.output.length) {
       Project(needFields, query)

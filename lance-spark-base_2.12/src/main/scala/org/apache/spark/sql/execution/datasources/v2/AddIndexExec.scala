@@ -32,7 +32,7 @@ import org.lance.index.scalar.{BTreeIndexParams, ScalarIndexParams}
 import org.lance.operation.{CreateIndex => AddIndexOperation}
 import org.lance.spark.{BaseLanceNamespaceSparkCatalog, LanceDataset, LanceRuntime, LanceSparkReadOptions}
 import org.lance.spark.arrow.LanceArrowWriter
-import org.lance.spark.utils.{CloseableUtil, Utils}
+import org.lance.spark.utils.{CloseableUtil, Utils, VectorUtils}
 import org.lance.spark.write.SingleBatchArrowReader
 
 import java.time.Instant
@@ -63,6 +63,22 @@ case class AddIndexExec(
     val lanceDataset = catalog.loadTable(ident) match {
       case d: LanceDataset => d
       case _ => throw new UnsupportedOperationException("AddIndex only supports LanceDataset")
+    }
+
+    if (IndexUtils.isVectorMethod(method)) {
+      val schema = lanceDataset.schema()
+      columns.foreach { colName =>
+        val field = schema.fields.find(_.name == colName).getOrElse(
+          throw new IllegalArgumentException(
+            s"Column '$colName' does not exist in table ${ident.toString}"))
+        if (!VectorUtils.isVectorField(field)) {
+          throw new IllegalArgumentException(
+            s"Column '$colName' is not a vector column: vector index method '$method' requires " +
+              s"an ARRAY<FLOAT|DOUBLE> column with metadata key " +
+              s"'${VectorUtils.ARROW_FIXED_SIZE_LIST_SIZE_KEY}' set to the vector dimension.")
+        }
+      }
+      return runVectorIndex(lanceDataset)
     }
 
     val readOptions = lanceDataset.readOptions()
@@ -146,6 +162,49 @@ case class AddIndexExec(
     Seq(new GenericInternalRow(Array[Any](
       fragmentIds.size.toLong,
       UTF8String.fromString(indexName))))
+  }
+
+  /**
+   * Single-shot, driver-side build for vector (ANN) indexes.
+   *
+   * Unlike scalar indexes, Lance's distributed vector-index path requires pre-computed IVF
+   * centroids — per-fragment tasks cannot train a global codebook on their own and the native
+   * code rejects the call with
+   * "Build Distributed Vector Index: missing precomputed IVF centroids".
+   *
+   * For the first cut, we sidestep that by letting Lance's native `createIndex` do the whole
+   * training + commit in one call on the driver. This forgoes the Spark-level fan-out but is the
+   * only working path today; a follow-up can precompute centroids in a Spark job and re-enable
+   * the per-fragment build through `IvfBuildParams.Builder.setCentroids`.
+   */
+  private def runVectorIndex(lanceDataset: LanceDataset): Seq[InternalRow] = {
+    val readOptions = lanceDataset.readOptions()
+    val argsJson = IndexUtils.toJson(args)
+    val indexType = IndexUtils.buildIndexType(method)
+    val params = IndexParams
+      .builder()
+      .setVectorIndexParams(VectorIndexParamsBuilder.build(method, argsJson))
+      .build()
+
+    val dataset = Utils.openDatasetBuilder(readOptions).build()
+    try {
+      val fragmentCount = dataset.getFragments.size().toLong
+      if (fragmentCount == 0L) {
+        return Seq(new GenericInternalRow(Array[Any](0L, UTF8String.fromString(indexName))))
+      }
+      val indexOptions = IndexOptions
+        .builder(columns.asJava, indexType, params)
+        .replace(true)
+        .withIndexName(indexName)
+        .withIndexUUID(UUID.randomUUID().toString)
+        .build()
+      dataset.createIndex(indexOptions)
+      Seq(new GenericInternalRow(Array[Any](
+        fragmentCount,
+        UTF8String.fromString(indexName))))
+    } finally {
+      dataset.close()
+    }
   }
 
   private def createIndexJob(
@@ -318,11 +377,17 @@ case class FragmentIndexTask(
   def execute(): String = {
     val readOptions = decode[LanceSparkReadOptions](encodedReadOptions)
     val indexType = IndexUtils.buildIndexType(method)
-    val params = IndexParams.builder()
-      .setScalarIndexParams(ScalarIndexParams.create(
-        IndexUtils.buildScalarIndexParamType(method),
-        argsJson))
-      .build()
+    val params = if (VectorIndexParamsBuilder.isVectorMethod(method)) {
+      IndexParams.builder()
+        .setVectorIndexParams(VectorIndexParamsBuilder.build(method, argsJson))
+        .build()
+    } else {
+      IndexParams.builder()
+        .setScalarIndexParams(ScalarIndexParams.create(
+          IndexUtils.buildScalarIndexParamType(method),
+          argsJson))
+        .build()
+    }
 
     val indexOptions = IndexOptions
       .builder(java.util.Arrays.asList(columns: _*), indexType, params)
@@ -562,6 +627,10 @@ object IndexUtils {
     method.toLowerCase match {
       case "btree" => IndexType.BTREE
       case "fts" => IndexType.INVERTED
+      case "ivf_flat" => IndexType.IVF_FLAT
+      case "ivf_pq" => IndexType.IVF_PQ
+      case "ivf_hnsw_pq" => IndexType.IVF_HNSW_PQ
+      case "ivf_hnsw_sq" => IndexType.IVF_HNSW_SQ
       case other => throw new UnsupportedOperationException(s"Unsupported index method: $other")
     }
   }
@@ -610,6 +679,13 @@ object IndexUtils {
 
     first
   }
+
+  /**
+   * True iff the given method is one of the ANN vector index kinds. Kept here so callers outside
+   * this file can branch cleanly between the scalar and vector parameter-building paths.
+   */
+  def isVectorMethod(method: String): Boolean =
+    VectorIndexParamsBuilder.isVectorMethod(method)
 
   def toJson(args: Seq[LanceNamedArgument]): String = {
     if (args.isEmpty) {

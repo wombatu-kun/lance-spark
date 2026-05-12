@@ -34,11 +34,13 @@ import org.apache.spark.sql.util.LanceArrowUtils;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 import org.junit.jupiter.api.io.TempDir;
+import org.roaringbitmap.RoaringBitmap;
 
 import java.nio.file.Path;
 import java.util.Arrays;
-import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -121,21 +123,34 @@ public class SparkPositionDeltaConflictTest {
       SparkPositionDeltaWrite writerB =
           new SparkPositionDeltaWrite(sparkSchema, opts, null, null, null, null);
 
-      // Writer A: replace original fragment with new data
+      // Build deletion bitmap targeting all rows in the original fragment
+      Map<Integer, RoaringBitmap> deletionMapA = new HashMap<>();
+      RoaringBitmap bitmapA = new RoaringBitmap();
+      for (int i = 0; i < 5; i++) {
+        bitmapA.add(i);
+      }
+      deletionMapA.put((int) originalFragmentId, bitmapA);
+
+      // Writer A: delete original rows + append new data
       List<FragmentMetadata> newFragsA =
           writeFragment(datasetUri, allocator, new int[] {1, 2}, new int[] {100, 200});
       WriterCommitMessage msgA =
-          new SparkPositionDeltaWrite.DeltaWriteTaskCommit(
-              Collections.singletonList(originalFragmentId), Collections.emptyList(), newFragsA);
+          new SparkPositionDeltaWrite.DeltaWriteTaskCommit(newFragsA, deletionMapA);
 
       writerA.toBatch().commit(new WriterCommitMessage[] {msgA});
 
       // Writer B: same replacement attempt with stale version — must fail
+      Map<Integer, RoaringBitmap> deletionMapB = new HashMap<>();
+      RoaringBitmap bitmapB = new RoaringBitmap();
+      for (int i = 0; i < 5; i++) {
+        bitmapB.add(i);
+      }
+      deletionMapB.put((int) originalFragmentId, bitmapB);
+
       List<FragmentMetadata> newFragsB =
           writeFragment(datasetUri, allocator, new int[] {1, 2}, new int[] {999, 888});
       WriterCommitMessage msgB =
-          new SparkPositionDeltaWrite.DeltaWriteTaskCommit(
-              Collections.singletonList(originalFragmentId), Collections.emptyList(), newFragsB);
+          new SparkPositionDeltaWrite.DeltaWriteTaskCommit(newFragsB, deletionMapB);
 
       assertThrows(
           Exception.class, () -> writerB.toBatch().commit(new WriterCommitMessage[] {msgB}));

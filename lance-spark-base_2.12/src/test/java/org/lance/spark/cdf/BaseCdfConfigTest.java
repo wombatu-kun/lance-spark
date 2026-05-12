@@ -74,11 +74,11 @@ public abstract class BaseCdfConfigTest {
 
       assertEquals(2, rows.size());
 
-      // Alice: updated in v3
+      // Alice: updated in v3 — created tracks actual insert version (v2)
       Row alice = rows.get(0);
       assertEquals(1, alice.getInt(0));
       assertEquals(110, alice.getInt(2));
-      assertEquals(1L, alice.getLong(3)); // created
+      assertEquals(2L, alice.getLong(3)); // created
       assertEquals(3L, alice.getLong(4)); // updated
 
       // Bob: untouched after fragment rewrite — reports actual insert version (v2)
@@ -135,11 +135,11 @@ public abstract class BaseCdfConfigTest {
 
       assertEquals(2, rows.size());
 
-      // Alice: updated in v3
+      // Alice: updated in v3 — created tracks actual insert version (v2)
       Row alice = rows.get(0);
       assertEquals(1, alice.getInt(0));
       assertEquals(110, alice.getInt(2));
-      assertEquals(1L, alice.getLong(3)); // created
+      assertEquals(2L, alice.getLong(3)); // created
       assertEquals(3L, alice.getLong(4)); // updated
 
       // Bob: untouched after fragment rewrite — reports actual insert version (v2)

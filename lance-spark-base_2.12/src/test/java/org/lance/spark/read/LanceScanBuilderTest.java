@@ -25,12 +25,8 @@ import org.apache.spark.sql.connector.expressions.aggregate.AggregateFunc;
 import org.apache.spark.sql.connector.expressions.aggregate.Aggregation;
 import org.apache.spark.sql.connector.expressions.aggregate.CountStar;
 import org.apache.spark.sql.connector.expressions.aggregate.Sum;
+import org.apache.spark.sql.connector.expressions.filter.Predicate;
 import org.apache.spark.sql.connector.read.Scan;
-import org.apache.spark.sql.sources.Filter;
-import org.apache.spark.sql.sources.GreaterThan;
-import org.apache.spark.sql.sources.IsNotNull;
-import org.apache.spark.sql.sources.LessThan;
-import org.apache.spark.sql.sources.StringContains;
 import org.apache.spark.sql.types.ArrayType;
 import org.apache.spark.sql.types.DataTypes;
 import org.apache.spark.sql.types.StructField;
@@ -79,59 +75,55 @@ public class LanceScanBuilderTest {
     assertEquals(emptySchema, scan.readSchema());
   }
 
-  // --- pushFilters ---
+  // --- pushPredicates ---
 
   @Test
-  public void testPushFiltersAllSupported() {
+  public void testPushPredicatesAllSupported() {
     LanceScanBuilder builder = createBuilder();
-    Filter[] filters =
-        new Filter[] {
-          new GreaterThan("x", 1L), new LessThan("y", 10L), new IsNotNull("b"),
-        };
-    Filter[] postScanFilters = builder.pushFilters(filters);
-    assertEquals(0, postScanFilters.length);
-    assertEquals(3, builder.pushedFilters().length);
+    Predicate[] predicates = {
+      TestPredicates.gt("x", 1L), TestPredicates.lt("y", 10L), TestPredicates.isNotNull("b"),
+    };
+    Predicate[] postScan = builder.pushPredicates(predicates);
+    assertEquals(0, postScan.length);
+    assertEquals(3, builder.pushedPredicates().length);
   }
 
   @Test
-  public void testPushFiltersMixedSupportedAndUnsupported() {
+  public void testPushPredicatesMixedSupportedAndUnsupported() {
     LanceScanBuilder builder = createBuilder();
-    // StringContains is not supported for push-down
-    Filter[] filters =
-        new Filter[] {
-          new GreaterThan("x", 1L), new StringContains("b", "test"),
-        };
-    Filter[] postScanFilters = builder.pushFilters(filters);
-    assertEquals(1, postScanFilters.length);
-    assertInstanceOf(StringContains.class, postScanFilters[0]);
-    assertEquals(1, builder.pushedFilters().length);
-    assertInstanceOf(GreaterThan.class, builder.pushedFilters()[0]);
+    // CONTAINS is not supported for push-down
+    Predicate[] predicates = {TestPredicates.gt("x", 1L), TestPredicates.contains("b", "test")};
+    Predicate[] postScan = builder.pushPredicates(predicates);
+    assertEquals(1, postScan.length);
+    assertEquals("CONTAINS", postScan[0].name());
+    assertEquals(1, builder.pushedPredicates().length);
+    assertEquals(">", builder.pushedPredicates()[0].name());
   }
 
   @Test
-  public void testPushFiltersEmptyArray() {
+  public void testPushPredicatesEmptyArray() {
     LanceScanBuilder builder = createBuilder();
-    Filter[] result = builder.pushFilters(new Filter[0]);
+    Predicate[] result = builder.pushPredicates(new Predicate[0]);
     assertEquals(0, result.length);
-    assertEquals(0, builder.pushedFilters().length);
+    assertEquals(0, builder.pushedPredicates().length);
   }
 
   @Test
-  public void testPushFiltersDisabledByConfig() {
+  public void testPushPredicatesDisabledByConfig() {
     LanceSparkReadOptions options =
         LanceSparkReadOptions.from(
             Collections.singletonMap(LanceSparkReadOptions.CONFIG_PUSH_DOWN_FILTERS, "false"),
             TestUtils.TestTable1Config.datasetUri);
     LanceScanBuilder builder =
         new LanceScanBuilder(TEST_SCHEMA, options, Collections.emptyMap(), null, null, null);
-    Filter[] filters = new Filter[] {new GreaterThan("x", 1L)};
-    Filter[] result = builder.pushFilters(filters);
+    Predicate[] predicates = {TestPredicates.gt("x", 1L)};
+    Predicate[] result = builder.pushPredicates(predicates);
     assertEquals(1, result.length);
-    assertEquals(0, builder.pushedFilters().length);
+    assertEquals(0, builder.pushedPredicates().length);
   }
 
   @Test
-  public void testPushFiltersWithNestedArrayOfStruct() {
+  public void testPushPredicatesWithNestedArrayOfStruct() {
     // Filters on non-Array<Struct> columns should be pushed down normally.
     StructType nestedSchema =
         new StructType(
@@ -155,10 +147,10 @@ public class LanceScanBuilderTest {
             null,
             Collections.emptyMap(),
             Collections.emptyMap());
-    Filter[] filters = new Filter[] {new GreaterThan("id", 1L)};
-    Filter[] result = builder.pushFilters(filters);
+    Predicate[] predicates = {TestPredicates.gt("id", 1L)};
+    Predicate[] result = builder.pushPredicates(predicates);
     assertEquals(0, result.length);
-    assertEquals(1, builder.pushedFilters().length);
+    assertEquals(1, builder.pushedPredicates().length);
   }
 
   // --- pushLimit ---
@@ -252,10 +244,10 @@ public class LanceScanBuilderTest {
   @Test
   public void testPushAggregationCountStarWithFiltersFallsBackToScanner() {
     LanceScanBuilder builder = createBuilder();
-    builder.pushFilters(new Filter[] {new GreaterThan("x", 0L)});
+    builder.pushPredicates(new Predicate[] {TestPredicates.gt("x", 0L)});
     Aggregation countStar =
         new Aggregation(new AggregateFunc[] {new CountStar()}, new Expression[] {});
-    // With pushed filters, metadata count cannot be used; falls back to scanner-based count
+    // With pushed predicates, metadata count cannot be used; falls back to scanner-based count
     assertTrue(builder.pushAggregation(countStar));
   }
 

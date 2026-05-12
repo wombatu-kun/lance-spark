@@ -16,6 +16,8 @@ package org.lance.spark.read;
 import org.lance.index.scalar.ZoneStats;
 
 import org.apache.spark.sql.catalyst.InternalRow;
+import org.apache.spark.sql.connector.expressions.Expression;
+import org.apache.spark.sql.connector.expressions.FieldReference;
 import org.apache.spark.sql.connector.expressions.filter.Predicate;
 import org.apache.spark.unsafe.types.UTF8String;
 import org.junit.jupiter.api.Test;
@@ -159,6 +161,25 @@ public class ZonemapFragmentPrunerTest {
     Optional<Set<Integer>> result = ZonemapFragmentPruner.pruneFragments(filters, stats);
     assertTrue(result.isPresent());
     assertTrue(result.get().isEmpty());
+  }
+
+  @Test
+  public void testInWithNonLiteralChildBailsOut() {
+    Map<String, List<ZoneStats>> stats = threeFragmentStats("x");
+    // x IN (50, <non-Literal expression>) — 50 alone matches only fragment 0,
+    // but the non-Literal child could match anything, so the pruner must not
+    // narrow to {0}. It must bail out (Optional.empty()) so the scan reads all
+    // fragments. Silently dropping the non-Literal would be a correctness bug.
+    Expression[] children =
+        new Expression[] {
+          FieldReference.apply("x"), TestPredicates.literalOf(50L), FieldReference.apply("y")
+        };
+    Predicate[] filters = new Predicate[] {new Predicate("IN", children)};
+
+    Optional<Set<Integer>> result = ZonemapFragmentPruner.pruneFragments(filters, stats);
+    assertFalse(
+        result.isPresent(),
+        "IN with a non-Literal child must bail out instead of pruning on the remaining literals");
   }
 
   @Test

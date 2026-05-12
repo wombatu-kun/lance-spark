@@ -222,11 +222,14 @@ public final class ZonemapFragmentPruner {
     }
 
     // Hoist literal extraction out of the per-zone loop: invariant across zones.
+    // Bail (no pruning) on any non-Literal child rather than silently dropping it,
+    // which would shrink the IN list and risk excluding fragments that actually match.
     List<Object> normalizedValues = new ArrayList<>(children.length - 1);
     for (int i = 1; i < children.length; i++) {
-      if (children[i] instanceof Literal) {
-        normalizedValues.add(normalizeLiteral(((Literal<?>) children[i]).value()));
+      if (!(children[i] instanceof Literal)) {
+        return Optional.empty();
       }
+      normalizedValues.add(normalizeLiteral(((Literal<?>) children[i]).value()));
     }
 
     Set<Integer> matchingFragments = new HashSet<>();

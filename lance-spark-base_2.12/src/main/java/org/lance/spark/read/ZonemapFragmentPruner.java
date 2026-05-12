@@ -29,6 +29,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -208,7 +209,6 @@ public final class ZonemapFragmentPruner {
     }
   }
 
-  @SuppressWarnings("unchecked")
   private static Optional<Set<Integer>> analyzeIn(
       Expression[] children, Map<String, List<ZoneStats>> statsByColumn) {
 
@@ -221,13 +221,17 @@ public final class ZonemapFragmentPruner {
       return Optional.empty();
     }
 
+    // Hoist literal extraction out of the per-zone loop: invariant across zones.
+    List<Object> normalizedValues = new ArrayList<>(children.length - 1);
+    for (int i = 1; i < children.length; i++) {
+      if (children[i] instanceof Literal) {
+        normalizedValues.add(normalizeLiteral(((Literal<?>) children[i]).value()));
+      }
+    }
+
     Set<Integer> matchingFragments = new HashSet<>();
     for (ZoneStats zone : stats) {
-      for (int i = 1; i < children.length; i++) {
-        if (!(children[i] instanceof Literal)) {
-          continue;
-        }
-        Object value = normalizeLiteral(((Literal<?>) children[i]).value());
+      for (Object value : normalizedValues) {
         if (value == null) {
           if (zone.getNullCount() > 0) {
             matchingFragments.add(zone.getFragmentId());
@@ -235,6 +239,7 @@ public final class ZonemapFragmentPruner {
           }
         } else {
           try {
+            @SuppressWarnings("unchecked")
             Comparable<Object> target = (Comparable<Object>) value;
             if (zoneMatchesComparison(zone, target, ComparisonType.EQUALS)) {
               matchingFragments.add(zone.getFragmentId());

@@ -209,12 +209,18 @@ public class FilterPushDown {
     if (value instanceof String) {
       return "'" + ((String) value).replace("'", "''") + "'";
     }
+    if (value instanceof org.apache.spark.sql.types.Decimal) {
+      return formatDecimalCast(((org.apache.spark.sql.types.Decimal) value).toJavaBigDecimal());
+    }
     if (value instanceof BigDecimal) {
-      BigDecimal bd = (BigDecimal) value;
-      int scale = bd.scale();
-      int precision = Math.max(bd.precision(), scale);
-      return "CAST(" + bd.toPlainString() + " AS DECIMAL(" + precision + ", " + scale + "))";
+      return formatDecimalCast((BigDecimal) value);
     }
     return value.toString();
+  }
+
+  private static String formatDecimalCast(BigDecimal bd) {
+    int scale = bd.scale();
+    int precision = Math.max(bd.precision(), scale);
+    return "CAST(" + bd.toPlainString() + " AS DECIMAL(" + precision + ", " + scale + "))";
   }
 }

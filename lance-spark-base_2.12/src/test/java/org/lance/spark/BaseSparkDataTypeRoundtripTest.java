@@ -159,6 +159,35 @@ public abstract class BaseSparkDataTypeRoundtripTest {
   }
 
   @Test
+  public void testDecimalFilterPushDownEndToEnd() {
+    // Regression test for the Decimal CAST wrapper that gets pushed to Lance's DataFusion parser.
+    // Spark V2 LiteralValue stores decimals as Catalyst's internal Decimal (not BigDecimal), so
+    // without an explicit CAST, bare numeric literals are inferred as Float64 and fail type
+    // resolution against Decimal128 columns. This drives a real Spark predicate pushdown — unlike
+    // FilterPushDownTest, which builds synthetic predicates via TestPredicates.
+    StructType schema =
+        new StructType()
+            .add("id", DataTypes.IntegerType, false)
+            .add("v", DataTypes.createDecimalType(10, 2), true);
+    List<Row> data =
+        Arrays.asList(
+            RowFactory.create(0, new BigDecimal("50.00")),
+            RowFactory.create(1, new BigDecimal("100.00")),
+            RowFactory.create(2, new BigDecimal("250.50")),
+            RowFactory.create(3, null));
+    List<Row> out =
+        writeAndRead(schema, data, "decimal_pushdown")
+            .filter("v >= 100.00")
+            .orderBy("id")
+            .collectAsList();
+    assertEquals(2, out.size());
+    assertEquals(1, out.get(0).getInt(0));
+    assertEquals(new BigDecimal("100.00"), out.get(0).getDecimal(1));
+    assertEquals(2, out.get(1).getInt(0));
+    assertEquals(new BigDecimal("250.50"), out.get(1).getDecimal(1));
+  }
+
+  @Test
   public void testDecimalSystemDefaultRoundtrip() {
     StructType schema =
         new StructType()

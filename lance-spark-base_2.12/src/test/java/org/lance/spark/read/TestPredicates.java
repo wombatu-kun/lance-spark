@@ -22,6 +22,7 @@ import org.apache.spark.sql.connector.expressions.filter.Or;
 import org.apache.spark.sql.connector.expressions.filter.Predicate;
 import org.apache.spark.sql.types.DataType;
 import org.apache.spark.sql.types.DataTypes;
+import org.apache.spark.sql.types.Decimal;
 import org.apache.spark.unsafe.types.UTF8String;
 
 import java.math.BigDecimal;
@@ -120,6 +121,7 @@ final class TestPredicates {
       int scale = bd.scale();
       int precision = Math.max(bd.precision(), scale);
       type = DataTypes.createDecimalType(precision, scale);
+      normalized = Decimal.apply(bd);
     } else if (value instanceof Date) {
       // Spark V2 represents Date as int epoch days
       type = DataTypes.DateType;

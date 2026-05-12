@@ -58,6 +58,7 @@ public class TpchDataGenerator {
     int scaleFactor = 1;
     String formatsStr = "parquet,lance";
     boolean useDoubleForDecimal = false;
+    String fileFormatVersion = null;
 
     for (int i = 0; i < args.length; i++) {
       switch (args[i]) {
@@ -72,6 +73,9 @@ public class TpchDataGenerator {
           break;
         case "--use-double-for-decimal":
           useDoubleForDecimal = true;
+          break;
+        case "--file-format-version":
+          fileFormatVersion = args[++i];
           break;
         default:
           System.err.println("Unknown argument: " + args[i]);
@@ -107,6 +111,9 @@ public class TpchDataGenerator {
       System.out.println("Scale factor:  " + scaleFactor);
       System.out.println("Formats:       " + formatsStr);
       System.out.println("Data dir:      " + dataDir);
+      if (fileFormatVersion != null) {
+        System.out.println("File format version: " + fileFormatVersion);
+      }
       System.out.println();
       System.out.flush();
 
@@ -118,7 +125,7 @@ public class TpchDataGenerator {
         System.out.flush();
 
         for (String table : TPCH_TABLES) {
-          generateTable(spark, catalogDb, table, format, dataDir);
+          generateTable(spark, catalogDb, table, format, dataDir, fileFormatVersion);
         }
 
         System.out.println();
@@ -133,7 +140,8 @@ public class TpchDataGenerator {
   }
 
   private static void generateTable(
-      SparkSession spark, String catalogDb, String table, String format, String dataDir) {
+      SparkSession spark, String catalogDb, String table, String format, String dataDir,
+      String fileFormatVersion) {
 
     boolean isLance = "lance".equalsIgnoreCase(format);
     String tablePath = dataDir + "/" + format + "/" + table;
@@ -165,7 +173,11 @@ public class TpchDataGenerator {
     String writeFormat = isLance ? "lance" : format;
     SaveMode mode = isLance ? SaveMode.ErrorIfExists : SaveMode.Overwrite;
 
-    df.write().mode(mode).format(writeFormat).save(tablePath);
+    org.apache.spark.sql.DataFrameWriter<Row> writer = df.write().mode(mode).format(writeFormat);
+    if (isLance && fileFormatVersion != null) {
+      writer = writer.option("file_format_version", fileFormatVersion);
+    }
+    writer.save(tablePath);
 
     long elapsed = System.currentTimeMillis() - start;
     long count = spark.read().format(writeFormat).load(tablePath).count();
@@ -179,6 +191,7 @@ public class TpchDataGenerator {
             + " --data-dir <path>"
             + " [--scale-factor 1]"
             + " [--formats parquet,lance]"
-            + " [--use-double-for-decimal]");
+            + " [--use-double-for-decimal]"
+            + " [--file-format-version <version>]");
   }
 }

@@ -274,7 +274,7 @@ if [[ -n "${EXECUTOR_CORES}" ]]; then
 fi
 
 SUBMIT_ARGS+=("--conf" "spark.dynamicAllocation.maxExecutors=${MAX_EXECUTORS}")
-SUBMIT_ARGS+=("--conf" "spark.sql.extensions=org.lance.spark.LanceSparkSessionExtension")
+SUBMIT_ARGS+=("--conf" "spark.sql.extensions=org.lance.spark.extensions.LanceSparkSessionExtensions")
 
 if [[ -n "${BUNDLE_JAR}" ]] && [[ "${BUNDLE_JAR}" != "${SPARK_HOME}"/jars/* ]]; then
     SUBMIT_ARGS+=("--jars" "${BUNDLE_JAR}")

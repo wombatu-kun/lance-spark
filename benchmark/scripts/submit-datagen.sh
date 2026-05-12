@@ -279,7 +279,7 @@ fi
 SUBMIT_ARGS+=("--conf" "spark.dynamicAllocation.maxExecutors=${MAX_EXECUTORS}")
 
 # Lance extension
-SUBMIT_ARGS+=("--conf" "spark.sql.extensions=org.lance.spark.LanceSparkSessionExtension")
+SUBMIT_ARGS+=("--conf" "spark.sql.extensions=org.lance.spark.extensions.LanceSparkSessionExtensions")
 
 # Kyuubi TPC-DS catalog
 SUBMIT_ARGS+=("--conf" "spark.sql.catalog.tpcds=org.apache.kyuubi.spark.connector.tpcds.TPCDSCatalog")

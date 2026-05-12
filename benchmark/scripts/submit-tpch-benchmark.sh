@@ -11,33 +11,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Submit TPC-DS benchmark queries as a Spark job.
+# Submit TPC-H benchmark queries as a Spark job.
 #
 # Submits via spark-submit using whatever Spark configuration is already
 # present (spark-defaults.conf, SPARK_HOME, etc.). Works with local mode,
 # standalone clusters, YARN, and Kubernetes.
 #
-# Tables must already exist under <data-dir>/<format>/. Use submit-datagen.sh
-# (or TpcdsDataGenerator) to create them first.
+# Tables must already exist under <data-dir>/<format>/. Use submit-tpch-datagen.sh
+# (or TpchDataGenerator) to create them first.
 #
-# The benchmark jar (shaded, includes Kyuubi TPC-DS connector) is built
+# The benchmark jar (shaded, includes Kyuubi TPC-H connector) is built
 # on-the-fly if not already present.
 #
 # Usage:
-#   ./submit-benchmark.sh --data-dir <path> --results-dir <path> [OPTIONS]
+#   ./submit-tpch-benchmark.sh --data-dir <path> --results-dir <path> [OPTIONS]
 #
 # Examples:
-#   # Run all 99 queries, 3 iterations, against both formats
-#   ./submit-benchmark.sh -d /tmp/tpcds/sf1 -r /tmp/tpcds/results
+#   # Run all 22 queries, 3 iterations, against both formats
+#   ./submit-tpch-benchmark.sh -d /tmp/tpch/sf1 -r /tmp/tpch/results
 #
 #   # Lance only, with explain plans and metrics
-#   ./submit-benchmark.sh -d /tmp/tpcds/sf1 -r /tmp/tpcds/results -f lance --explain --metrics
+#   ./submit-tpch-benchmark.sh -d /tmp/tpch/sf1 -r /tmp/tpch/results -f lance --explain --metrics
 #
 #   # Run specific queries
-#   ./submit-benchmark.sh -d /tmp/tpcds/sf1 -r /tmp/tpcds/results --queries q3,q14a,q55
+#   ./submit-tpch-benchmark.sh -d /tmp/tpch/sf1 -r /tmp/tpch/results --queries q3,q5,q10
 #
 #   # Build for Spark 4.0 / Scala 2.13
-#   SPARK_VERSION=4.0 SCALA_VERSION=2.13 ./submit-benchmark.sh -d /tmp/tpcds/sf1 -r /tmp/results
+#   SPARK_VERSION=4.0 SCALA_VERSION=2.13 ./submit-tpch-benchmark.sh -d /tmp/tpch/sf1 -r /tmp/results
 
 set -euo pipefail
 
@@ -93,9 +93,9 @@ SPARK_SUBMIT="${SPARK_HOME}/bin/spark-submit"
 # ---------------------------------------------------------------------------
 show_help() {
     cat <<'EOF'
-Usage: submit-benchmark.sh --data-dir <path> --results-dir <path> [OPTIONS]
+Usage: submit-tpch-benchmark.sh --data-dir <path> --results-dir <path> [OPTIONS]
 
-Run TPC-DS benchmark queries against pre-generated Lance and Parquet tables.
+Run TPC-H benchmark queries against pre-generated Lance and Parquet tables.
 
 Options:
     --data-dir, -d DIR          Data directory with generated tables (REQUIRED)
@@ -110,7 +110,7 @@ Options:
     --app-name NAME             Spark application name
     --explain                   Print EXPLAIN plan for each query (first iteration)
     --metrics                   Collect per-query task-level metrics
-    --queries QUERIES           Comma-separated query subset (e.g. q3,q14a,q55)
+    --queries QUERIES           Comma-separated query subset (e.g. q3,q5,q10)
     --conf KEY=VALUE            Extra Spark conf (repeatable)
     -h, --help                  Show this help message
 
@@ -121,16 +121,16 @@ Environment variables:
 
 Examples:
     # Run all queries, 3 iterations, both formats
-    ./submit-benchmark.sh -d /tmp/tpcds/sf1 -r /tmp/tpcds/results
+    ./submit-tpch-benchmark.sh -d /tmp/tpch/sf1 -r /tmp/tpch/results
 
     # Lance only, with profiling
-    ./submit-benchmark.sh -d /tmp/tpcds/sf1 -r /tmp/results -f lance --explain --metrics
+    ./submit-tpch-benchmark.sh -d /tmp/tpch/sf1 -r /tmp/results -f lance --explain --metrics
 
     # Specific queries, 1 iteration
-    ./submit-benchmark.sh -d /tmp/tpcds/sf1 -r /tmp/results --queries q3,q55 -i 1
+    ./submit-tpch-benchmark.sh -d /tmp/tpch/sf1 -r /tmp/results --queries q3,q10 -i 1
 
     # Build for Spark 4.0 / Scala 2.13
-    SPARK_VERSION=4.0 SCALA_VERSION=2.13 ./submit-benchmark.sh -d /tmp/tpcds/sf1 -r /tmp/results
+    SPARK_VERSION=4.0 SCALA_VERSION=2.13 ./submit-tpch-benchmark.sh -d /tmp/tpch/sf1 -r /tmp/results
 EOF
 }
 
@@ -187,7 +187,7 @@ if [[ -z "${DATA_DIR}" || -z "${RESULTS_DIR}" ]]; then
 fi
 
 if [[ -z "${APP_NAME}" ]]; then
-    APP_NAME="${USER:-tpcds}-benchmark"
+    APP_NAME="${USER:-tpch}-benchmark"
 fi
 
 # ---------------------------------------------------------------------------
@@ -260,7 +260,7 @@ fi
 # ---------------------------------------------------------------------------
 SUBMIT_ARGS=()
 
-SUBMIT_ARGS+=("--class" "org.lance.spark.benchmark.TpcdsBenchmarkRunner")
+SUBMIT_ARGS+=("--class" "org.lance.spark.benchmark.TpchBenchmarkRunner")
 SUBMIT_ARGS+=("--name" "${APP_NAME}")
 
 if [[ -n "${DRIVER_MEMORY}" ]]; then
@@ -287,7 +287,7 @@ fi
 # The benchmark jar (application jar)
 SUBMIT_ARGS+=("${BENCHMARK_JAR}")
 
-# Application arguments (passed to TpcdsBenchmarkRunner.main)
+# Application arguments (passed to TpchBenchmarkRunner.main)
 SUBMIT_ARGS+=("--data-dir" "${DATA_DIR}")
 SUBMIT_ARGS+=("--results-dir" "${RESULTS_DIR}")
 SUBMIT_ARGS+=("--formats" "${FORMATS}")
@@ -307,7 +307,7 @@ fi
 # Print summary and submit
 # ---------------------------------------------------------------------------
 echo "============================================="
-echo "  TPC-DS Benchmark — Spark Submit"
+echo "  TPC-H Benchmark — Spark Submit"
 echo "============================================="
 echo "Formats:         ${FORMATS}"
 echo "Iterations:      ${ITERATIONS}"

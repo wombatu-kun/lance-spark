@@ -11,52 +11,50 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Submit TPC-DS benchmark queries as a Spark job.
+# Submit TPC-H data generation as a Spark job.
 #
 # Submits via spark-submit using whatever Spark configuration is already
 # present (spark-defaults.conf, SPARK_HOME, etc.). Works with local mode,
 # standalone clusters, YARN, and Kubernetes.
 #
-# Tables must already exist under <data-dir>/<format>/. Use submit-datagen.sh
-# (or TpcdsDataGenerator) to create them first.
-#
-# The benchmark jar (shaded, includes Kyuubi TPC-DS connector) is built
+# The benchmark jar (shaded, includes Kyuubi TPC-H connector) is built
 # on-the-fly if not already present.
 #
 # Usage:
-#   ./submit-benchmark.sh --data-dir <path> --results-dir <path> [OPTIONS]
+#   ./submit-tpch-datagen.sh --data-dir <path> [OPTIONS]
 #
 # Examples:
-#   # Run all 99 queries, 3 iterations, against both formats
-#   ./submit-benchmark.sh -d /tmp/tpcds/sf1 -r /tmp/tpcds/results
+#   # Generate SF=1 in both formats to a local directory
+#   ./submit-tpch-datagen.sh -d /tmp/tpch/sf1
 #
-#   # Lance only, with explain plans and metrics
-#   ./submit-benchmark.sh -d /tmp/tpcds/sf1 -r /tmp/tpcds/results -f lance --explain --metrics
+#   # Generate SF=10 Lance-only to an object store, 20 executors
+#   ./submit-tpch-datagen.sh -d s3a://my-bucket/tpch/sf10 -s 10 -f lance --max-executors 20
 #
-#   # Run specific queries
-#   ./submit-benchmark.sh -d /tmp/tpcds/sf1 -r /tmp/tpcds/results --queries q3,q14a,q55
+#   # Generate SF=100 with custom resources
+#   ./submit-tpch-datagen.sh -d /data/tpch/sf100 -s 100 --max-executors 50 --driver-memory 16g
 #
 #   # Build for Spark 4.0 / Scala 2.13
-#   SPARK_VERSION=4.0 SCALA_VERSION=2.13 ./submit-benchmark.sh -d /tmp/tpcds/sf1 -r /tmp/results
+#   SPARK_VERSION=4.0 SCALA_VERSION=2.13 ./submit-tpch-datagen.sh -d /tmp/tpch/sf1
+#
+#   # Use pre-built benchmark jar
+#   ./submit-tpch-datagen.sh -d /data/tpch/sf1 --benchmark-jar /path/to/benchmark.jar
 
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
-FORMATS="lance,parquet"
+SCALE_FACTOR=1
+FORMATS="parquet,lance"
 DATA_DIR=""
-RESULTS_DIR=""
-ITERATIONS=3
 MAX_EXECUTORS=10
 DRIVER_MEMORY=""
 EXECUTOR_MEMORY=""
 EXECUTOR_CORES=""
 BENCHMARK_JAR=""
 APP_NAME=""
-EXPLAIN=""
-METRICS=""
-QUERIES=""
+USE_DOUBLE_FOR_DECIMAL=""
+FILE_FORMAT_VERSION=""
 EXTRA_CONF=()
 
 # Configurable Spark/Scala versions (override via environment)
@@ -93,24 +91,23 @@ SPARK_SUBMIT="${SPARK_HOME}/bin/spark-submit"
 # ---------------------------------------------------------------------------
 show_help() {
     cat <<'EOF'
-Usage: submit-benchmark.sh --data-dir <path> --results-dir <path> [OPTIONS]
+Usage: submit-tpch-datagen.sh --data-dir <path> [OPTIONS]
 
-Run TPC-DS benchmark queries against pre-generated Lance and Parquet tables.
+Generate TPC-H data via a Spark job using the Kyuubi TPC-H connector.
 
 Options:
-    --data-dir, -d DIR          Data directory with generated tables (REQUIRED)
-    --results-dir, -r DIR       Output directory for CSV results (REQUIRED)
-    --formats, -f FORMATS       Comma-separated formats (default: lance,parquet)
-    --iterations, -i NUM        Iterations per query (default: 3)
+    --data-dir, -d DIR          Output directory (REQUIRED)
+                                Supports local paths, s3a://, gs://, abfss://, etc.
+    --scale-factor, -s SF       TPC-H scale factor (default: 1)
+    --formats, -f FORMATS       Comma-separated formats (default: parquet,lance)
     --max-executors NUM         Dynamic allocation max executors (default: 10)
     --driver-memory MEM         Driver memory, e.g. 8g (default: from Spark config)
     --executor-memory MEM       Executor memory, e.g. 16g (default: from Spark config)
     --executor-cores NUM        Executor cores (default: from Spark config)
     --benchmark-jar JAR         Path to pre-built benchmark jar (auto-built if absent)
     --app-name NAME             Spark application name
-    --explain                   Print EXPLAIN plan for each query (first iteration)
-    --metrics                   Collect per-query task-level metrics
-    --queries QUERIES           Comma-separated query subset (e.g. q3,q14a,q55)
+    --use-double-for-decimal    Convert TPC-H decimal columns to double
+    --file-format-version VER   Lance file format version for writes (e.g. LEGACY, STABLE, 2.2)
     --conf KEY=VALUE            Extra Spark conf (repeatable)
     -h, --help                  Show this help message
 
@@ -120,17 +117,20 @@ Environment variables:
     SPARK_HOME                  Path to Spark installation
 
 Examples:
-    # Run all queries, 3 iterations, both formats
-    ./submit-benchmark.sh -d /tmp/tpcds/sf1 -r /tmp/tpcds/results
+    # Local SF=1, both formats
+    ./submit-tpch-datagen.sh -d /tmp/tpch/sf1
 
-    # Lance only, with profiling
-    ./submit-benchmark.sh -d /tmp/tpcds/sf1 -r /tmp/results -f lance --explain --metrics
+    # SF=10 to S3, Lance only, 20 executors
+    ./submit-tpch-datagen.sh -d s3a://my-bucket/tpch/sf10 -s 10 -f lance --max-executors 20
 
-    # Specific queries, 1 iteration
-    ./submit-benchmark.sh -d /tmp/tpcds/sf1 -r /tmp/results --queries q3,q55 -i 1
+    # SF=100 with custom resources
+    ./submit-tpch-datagen.sh -d /data/tpch/sf100 -s 100 --max-executors 50 --driver-memory 16g
 
     # Build for Spark 4.0 / Scala 2.13
-    SPARK_VERSION=4.0 SCALA_VERSION=2.13 ./submit-benchmark.sh -d /tmp/tpcds/sf1 -r /tmp/results
+    SPARK_VERSION=4.0 SCALA_VERSION=2.13 ./submit-tpch-datagen.sh -d /tmp/tpch/sf1
+
+    # Generate Lance tables with a specific file format version
+    ./submit-tpch-datagen.sh -d /tmp/tpch/sf1 --file-format-version LEGACY
 EOF
 }
 
@@ -141,12 +141,10 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --data-dir|-d)
             DATA_DIR="$2"; shift 2 ;;
-        --results-dir|-r)
-            RESULTS_DIR="$2"; shift 2 ;;
+        --scale-factor|-s)
+            SCALE_FACTOR="$2"; shift 2 ;;
         --formats|-f)
             FORMATS="$2"; shift 2 ;;
-        --iterations|-i)
-            ITERATIONS="$2"; shift 2 ;;
         --max-executors)
             MAX_EXECUTORS="$2"; shift 2 ;;
         --driver-memory)
@@ -159,12 +157,10 @@ while [[ $# -gt 0 ]]; do
             BENCHMARK_JAR="$2"; shift 2 ;;
         --app-name)
             APP_NAME="$2"; shift 2 ;;
-        --explain)
-            EXPLAIN="true"; shift ;;
-        --metrics)
-            METRICS="true"; shift ;;
-        --queries)
-            QUERIES="$2"; shift 2 ;;
+        --use-double-for-decimal)
+            USE_DOUBLE_FOR_DECIMAL="true"; shift ;;
+        --file-format-version)
+            FILE_FORMAT_VERSION="$2"; shift 2 ;;
         --conf)
             EXTRA_CONF+=("--conf" "$2"); shift 2 ;;
         -h|--help)
@@ -179,15 +175,15 @@ done
 # ---------------------------------------------------------------------------
 # Validate required arguments
 # ---------------------------------------------------------------------------
-if [[ -z "${DATA_DIR}" || -z "${RESULTS_DIR}" ]]; then
-    echo "Error: --data-dir and --results-dir are both required." >&2
+if [[ -z "${DATA_DIR}" ]]; then
+    echo "Error: --data-dir is required." >&2
     echo "" >&2
     show_help >&2
     exit 1
 fi
 
 if [[ -z "${APP_NAME}" ]]; then
-    APP_NAME="${USER:-tpcds}-benchmark"
+    APP_NAME="${USER:-tpch}-datagen-sf${SCALE_FACTOR}"
 fi
 
 # ---------------------------------------------------------------------------
@@ -202,11 +198,12 @@ fi
 # ---------------------------------------------------------------------------
 # Resolve Spark version for Maven build
 # ---------------------------------------------------------------------------
+# Map SPARK_VERSION (major) to the full version used by the parent POM
 case "${SPARK_VERSION}" in
     3.4) MVN_SPARK_VERSION="3.4.4" ;;
     3.5) MVN_SPARK_VERSION="3.5.5" ;;
     4.0) MVN_SPARK_VERSION="4.0.0" ;;
-    4.1) MVN_SPARK_VERSION="4.0.0" ;;
+    4.1) MVN_SPARK_VERSION="4.0.0" ;;  # TODO: update when 4.1 releases
     *)   MVN_SPARK_VERSION="${SPARK_VERSION}" ;;
 esac
 
@@ -240,8 +237,11 @@ fi
 # ---------------------------------------------------------------------------
 # Find the lance-spark bundle jar
 # ---------------------------------------------------------------------------
+# Prefer a jar already in Spark's jars/ directory.
+# Fall back to the locally-built bundle from the project tree.
 BUNDLE_JAR=""
 
+# Check Spark jars dir first
 for f in "${SPARK_HOME}"/jars/lance-spark-bundle-*.jar; do
     if [[ -f "$f" ]]; then
         BUNDLE_JAR="$f"
@@ -249,6 +249,7 @@ for f in "${SPARK_HOME}"/jars/lance-spark-bundle-*.jar; do
     fi
 done
 
+# Fall back to project-built bundle (match current Spark/Scala version)
 if [[ -z "${BUNDLE_JAR}" ]]; then
     BUNDLE_JAR=$(find "${PROJECT_ROOT}" \
         -path "*/lance-spark-bundle-${SPARK_VERSION}_${SCALA_VERSION}/target/lance-spark-bundle-*.jar" \
@@ -260,9 +261,10 @@ fi
 # ---------------------------------------------------------------------------
 SUBMIT_ARGS=()
 
-SUBMIT_ARGS+=("--class" "org.lance.spark.benchmark.TpcdsBenchmarkRunner")
+SUBMIT_ARGS+=("--class" "org.lance.spark.benchmark.TpchDataGenerator")
 SUBMIT_ARGS+=("--name" "${APP_NAME}")
 
+# Resource overrides (only set if user specified; otherwise inherit spark-defaults.conf)
 if [[ -n "${DRIVER_MEMORY}" ]]; then
     SUBMIT_ARGS+=("--driver-memory" "${DRIVER_MEMORY}")
 fi
@@ -273,13 +275,21 @@ if [[ -n "${EXECUTOR_CORES}" ]]; then
     SUBMIT_ARGS+=("--executor-cores" "${EXECUTOR_CORES}")
 fi
 
+# Dynamic allocation — inherit defaults but allow overriding max executors
 SUBMIT_ARGS+=("--conf" "spark.dynamicAllocation.maxExecutors=${MAX_EXECUTORS}")
+
+# Lance extension
 SUBMIT_ARGS+=("--conf" "spark.sql.extensions=org.lance.spark.extensions.LanceSparkSessionExtensions")
 
+# Kyuubi TPC-H catalog
+SUBMIT_ARGS+=("--conf" "spark.sql.catalog.tpch=org.apache.kyuubi.spark.connector.tpch.TPCHCatalog")
+
+# Add bundle jar if not already in Spark jars dir
 if [[ -n "${BUNDLE_JAR}" ]] && [[ "${BUNDLE_JAR}" != "${SPARK_HOME}"/jars/* ]]; then
     SUBMIT_ARGS+=("--jars" "${BUNDLE_JAR}")
 fi
 
+# Extra user confs
 if [[ ${#EXTRA_CONF[@]} -gt 0 ]]; then
     SUBMIT_ARGS+=("${EXTRA_CONF[@]}")
 fi
@@ -287,32 +297,28 @@ fi
 # The benchmark jar (application jar)
 SUBMIT_ARGS+=("${BENCHMARK_JAR}")
 
-# Application arguments (passed to TpcdsBenchmarkRunner.main)
+# Application arguments (passed to TpchDataGenerator.main)
 SUBMIT_ARGS+=("--data-dir" "${DATA_DIR}")
-SUBMIT_ARGS+=("--results-dir" "${RESULTS_DIR}")
+SUBMIT_ARGS+=("--scale-factor" "${SCALE_FACTOR}")
 SUBMIT_ARGS+=("--formats" "${FORMATS}")
-SUBMIT_ARGS+=("--iterations" "${ITERATIONS}")
 
-if [[ -n "${EXPLAIN}" ]]; then
-    SUBMIT_ARGS+=("--explain")
+if [[ -n "${USE_DOUBLE_FOR_DECIMAL}" ]]; then
+    SUBMIT_ARGS+=("--use-double-for-decimal")
 fi
-if [[ -n "${METRICS}" ]]; then
-    SUBMIT_ARGS+=("--metrics")
-fi
-if [[ -n "${QUERIES}" ]]; then
-    SUBMIT_ARGS+=("--queries" "${QUERIES}")
+
+if [[ -n "${FILE_FORMAT_VERSION}" ]]; then
+    SUBMIT_ARGS+=("--file-format-version" "${FILE_FORMAT_VERSION}")
 fi
 
 # ---------------------------------------------------------------------------
 # Print summary and submit
 # ---------------------------------------------------------------------------
 echo "============================================="
-echo "  TPC-DS Benchmark — Spark Submit"
+echo "  TPC-H Data Generation — Spark Submit"
 echo "============================================="
+echo "Scale factor:    ${SCALE_FACTOR}"
 echo "Formats:         ${FORMATS}"
-echo "Iterations:      ${ITERATIONS}"
 echo "Data dir:        ${DATA_DIR}"
-echo "Results dir:     ${RESULTS_DIR}"
 echo "Max executors:   ${MAX_EXECUTORS}"
 echo "Spark version:   ${SPARK_VERSION}"
 echo "Scala version:   ${SCALA_VERSION}"
@@ -321,11 +327,9 @@ echo "Benchmark jar:   ${BENCHMARK_JAR}"
 if [[ -n "${BUNDLE_JAR}" ]]; then
     echo "Bundle jar:      ${BUNDLE_JAR}"
 fi
-if [[ -n "${QUERIES}" ]]; then
-    echo "Queries:         ${QUERIES}"
+if [[ -n "${FILE_FORMAT_VERSION}" ]]; then
+    echo "File format ver: ${FILE_FORMAT_VERSION}"
 fi
-echo "Explain:         ${EXPLAIN:-false}"
-echo "Metrics:         ${METRICS:-false}"
 echo "App name:        ${APP_NAME}"
 echo "============================================="
 echo ""

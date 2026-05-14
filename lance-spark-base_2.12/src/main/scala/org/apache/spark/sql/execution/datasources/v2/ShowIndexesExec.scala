@@ -46,13 +46,13 @@ case class ShowIndexesExec(
 
     val dataset = Utils.openDatasetBuilder(readOptions).build()
     try {
-      val indexes = dataset.getIndexes().asScala.toSeq
+      val indexes = dataset.describeIndices().asScala.toSeq
       val fieldIdToName = dataset.getLanceSchema().fields().asScala
         .map(f => (java.lang.Integer.valueOf(f.getId), f.getName))
         .toMap
 
       indexes.map { idx =>
-        val fieldIds = idx.fields()
+        val fieldIds = idx.getFieldIds
         val fieldNamesArray =
           if (fieldIds == null) {
             null
@@ -64,7 +64,7 @@ case class ShowIndexesExec(
             new GenericArrayData(names.toArray[AnyRef])
           }
 
-        val name = idx.name()
+        val name = idx.getName
         val stats = dataset.getIndexStatistics(name)
         val indexTypeValue = stats.get("index_type")
         val indexTypeUtf8 =

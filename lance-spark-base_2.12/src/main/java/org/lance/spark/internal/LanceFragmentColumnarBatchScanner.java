@@ -23,6 +23,7 @@ import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.complex.StructVector;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.spark.sql.execution.vectorized.ConstantColumnVector;
+import org.apache.spark.sql.types.DataType;
 import org.apache.spark.sql.types.DataTypes;
 import org.apache.spark.sql.types.StructField;
 import org.apache.spark.sql.types.StructType;
@@ -63,9 +64,25 @@ public class LanceFragmentColumnarBatchScanner implements AutoCloseable {
     if (hasNext) {
       VectorSchemaRoot root = arrowReader.getVectorSchemaRoot();
 
+      // Bind Arrow children to Spark's expected field order by name. Lance's native scan does not
+      // push down nested struct projection — Arrow always carries on-disk struct children in
+      // physical order — so the schema-aware LanceArrowColumnVector constructor is required when
+      // the input-partition schema may differ from Arrow's physical order (e.g. nested struct
+      // pruning). See GitHub issue #499.
+      StructType partitionSchema = fragmentScanner.getInputPartition().getSchema();
+      Map<String, DataType> sparkTypesByName = new HashMap<>(partitionSchema.size() * 2);
+      for (StructField sparkField : partitionSchema.fields()) {
+        sparkTypesByName.put(sparkField.name(), sparkField.dataType());
+      }
       List<ColumnVector> fieldVectors =
           root.getFieldVectors().stream()
-              .map(LanceArrowColumnVector::new)
+              .map(
+                  fv -> {
+                    DataType sparkType = sparkTypesByName.get(fv.getField().getName());
+                    return sparkType != null
+                        ? new LanceArrowColumnVector(fv, sparkType)
+                        : new LanceArrowColumnVector(fv);
+                  })
               .collect(Collectors.toList());
 
       // Add virtual columns for blob metadata

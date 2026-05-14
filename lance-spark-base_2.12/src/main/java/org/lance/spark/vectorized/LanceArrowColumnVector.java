@@ -34,7 +34,9 @@ import org.apache.arrow.vector.complex.LargeListVector;
 import org.apache.arrow.vector.complex.ListVector;
 import org.apache.arrow.vector.complex.MapVector;
 import org.apache.arrow.vector.complex.StructVector;
+import org.apache.spark.sql.types.DataType;
 import org.apache.spark.sql.types.Decimal;
+import org.apache.spark.sql.types.StructType;
 import org.apache.spark.sql.util.LanceArrowUtils;
 import org.apache.spark.sql.vectorized.ArrowColumnVector;
 import org.apache.spark.sql.vectorized.ColumnVector;
@@ -62,7 +64,30 @@ public class LanceArrowColumnVector extends ColumnVector {
 
   public LanceArrowColumnVector(ValueVector vector) {
     super(LanceArrowUtils.fromArrowField(vector.getField()));
+    initFromVector(vector);
+  }
 
+  /**
+   * Schema-aware constructor. When {@code sparkType} is a {@link StructType} and the underlying
+   * Arrow vector is a {@link StructVector} (and not a Blob struct), children are bound by name in
+   * {@code sparkType}'s field order rather than by physical Arrow ordinal. This lets the same Arrow
+   * vector serve a pruned or reordered Spark schema correctly — see GitHub issue #499.
+   *
+   * <p>For all other vector / type combinations the dispatch is identical to the single-argument
+   * constructor; {@code sparkType} only changes the reported {@link #dataType()}.
+   */
+  public LanceArrowColumnVector(ValueVector vector, DataType sparkType) {
+    super(sparkType);
+    if (sparkType instanceof StructType
+        && vector instanceof StructVector
+        && !BlobUtils.isBlobArrowField(vector.getField())) {
+      structAccessor = new LanceStructAccessor((StructVector) vector, (StructType) sparkType);
+      return;
+    }
+    initFromVector(vector);
+  }
+
+  private void initFromVector(ValueVector vector) {
     if (vector instanceof UInt1Vector) {
       uInt1Accessor = new UInt1Accessor((UInt1Vector) vector);
     } else if (vector instanceof UInt2Vector) {

@@ -361,6 +361,13 @@ object LanceArrowUtils {
     case _: YearMonthIntervalType => new ArrowType.Interval(IntervalUnit.YEAR_MONTH)
     case _: DayTimeIntervalType => new ArrowType.Duration(TimeUnit.MICROSECOND)
     case CalendarIntervalType => new ArrowType.Interval(IntervalUnit.MONTH_DAY_NANO)
+    // In Spark 3.4/3.5, CharType and VarcharType extend AtomicType (not StringType),
+    // so `case _: StringType` above does not match them. On Spark 4.0+ they extend
+    // StringType and are already caught above, making these branches harmlessly unreachable.
+    // Kept for Spark 3.x compatibility. Length constraints are intentionally discarded —
+    // Arrow has no varchar concept.
+    case _: CharType | _: VarcharType if largeVarTypes => ArrowType.LargeUtf8.INSTANCE
+    case _: CharType | _: VarcharType => ArrowType.Utf8.INSTANCE
     case _ =>
       throw unsupportedDataTypeError(dt)
   }

@@ -88,6 +88,13 @@ object LanceArrowWriter {
         new DecimalWriter(vector, dt.precision, dt.scale)
       case (StringType, vector: VarCharVector) => new StringWriter(vector)
       case (StringType, vector: LargeVarCharVector) => new LargeStringWriter(vector)
+      // The (StringType, ...) matches above compare the value against the StringType case
+      // object via equals(). CharType/VarcharType never match: on Spark 3.4/3.5 they extend
+      // AtomicType (different hierarchy); on 4.0+ they extend StringType but carry a different
+      // constraint (FixedLength/MaxLength vs NoConstraint). Handle explicitly.
+      case (_: CharType | _: VarcharType, vector: VarCharVector) => new StringWriter(vector)
+      case (_: CharType | _: VarcharType, vector: LargeVarCharVector) =>
+        new LargeStringWriter(vector)
       case (BinaryType, vector: VarBinaryVector) => new BinaryWriter(vector)
       case (BinaryType, vector: LargeVarBinaryVector) => new LargeBinaryWriter(vector)
       case (DateType, vector: DateDayVector) => new DateWriter(vector)

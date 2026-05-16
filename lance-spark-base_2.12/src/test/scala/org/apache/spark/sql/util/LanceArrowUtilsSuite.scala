@@ -258,6 +258,39 @@ class LanceArrowUtilsSuite extends AnyFunSuite {
       MapType(StringType, new StructType().add("i_0", IntegerType).add("i_1", StringType)))
   }
 
+  // CharType/VarcharType reach the connector as distinct types when tables are created via
+  // SQL DDL through a V2 catalog (Spark 3.1+ default: charVarcharAsString=false). These unit
+  // tests exercise the conversion functions directly, without requiring SparkSession.
+  test("CharType maps to Arrow Utf8") {
+    val field = LanceArrowUtils.toArrowField("v", CharType(10), nullable = true, "UTC")
+    assert(field.getType === ArrowType.Utf8.INSTANCE)
+  }
+
+  test("VarcharType maps to Arrow Utf8") {
+    val field = LanceArrowUtils.toArrowField("v", VarcharType(50), nullable = true, "UTC")
+    assert(field.getType === ArrowType.Utf8.INSTANCE)
+  }
+
+  test("CharType maps to Arrow LargeUtf8 when largeVarTypes is true") {
+    val field = LanceArrowUtils.toArrowField(
+      "v",
+      CharType(10),
+      nullable = true,
+      "UTC",
+      largeVarTypes = true)
+    assert(field.getType === ArrowType.LargeUtf8.INSTANCE)
+  }
+
+  test("VarcharType maps to Arrow LargeUtf8 when largeVarTypes is true") {
+    val field = LanceArrowUtils.toArrowField(
+      "v",
+      VarcharType(50),
+      nullable = true,
+      "UTC",
+      largeVarTypes = true)
+    assert(field.getType === ArrowType.LargeUtf8.INSTANCE)
+  }
+
   test("large varchar metadata produces LargeUtf8 arrow type") {
     import org.lance.spark.utils.LargeVarCharUtils
 

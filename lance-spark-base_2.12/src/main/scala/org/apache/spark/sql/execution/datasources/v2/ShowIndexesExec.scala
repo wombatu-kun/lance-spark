@@ -58,10 +58,10 @@ case class ShowIndexesExec(
         .groupBy(_.name())
         .toSeq
         .sortBy(_._1)
-        .map(_._2.head)
       val lanceSchema = dataset.getLanceSchema()
 
-      indexes.map { idx =>
+      indexes.map { case (_, indexSegments) =>
+        val idx = indexSegments.head
         val fieldIds = idx.fields()
         val fieldNamesArray =
           if (fieldIds == null) {
@@ -98,6 +98,33 @@ case class ShowIndexesExec(
         val numUnindexedFragments = getLong("num_unindexed_fragments")
         val numUnindexedRows = getLong("num_unindexed_rows")
 
+        val indexedPercent: java.lang.Double =
+          if (numIndexedRows == null || numUnindexedRows == null) {
+            null
+          } else {
+            val total = numIndexedRows.longValue() + numUnindexedRows.longValue()
+            if (total <= 0L) {
+              null
+            } else {
+              val percent = 100.0 * numIndexedRows.longValue() / total
+              math.floor(percent * 100.0) / 100.0
+            }
+          }
+
+        val numSegments = {
+          val reported = getLong("num_segments")
+          if (reported != null) reported else getLong("num_indices")
+        }
+
+        val sizeBytes: java.lang.Long = {
+          val perSegment = indexSegments.map(segment => segment.getSizeBytes)
+          if (perSegment.exists(!_.isPresent)) {
+            null
+          } else {
+            perSegment.map(_.get.longValue()).sum
+          }
+        }
+
         new GenericInternalRow(Array[Any](
           UTF8String.fromString(name),
           fieldNamesArray,
@@ -105,7 +132,10 @@ case class ShowIndexesExec(
           numIndexedFragments,
           numIndexedRows,
           numUnindexedFragments,
-          numUnindexedRows))
+          numUnindexedRows,
+          indexedPercent,
+          numSegments,
+          sizeBytes))
       }
     } finally {
       dataset.close()
